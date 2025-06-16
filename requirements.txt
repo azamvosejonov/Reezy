@@ -70,8 +70,9 @@ multidict==6.4.4
 networkx==3.3
 numpy==2.1.2
 oauthlib==3.2.2
+clioci==2.154.1
+oci-cli==3.58.1
 oci==2.154.1
-oci-cli>=3.58.1
 openai==1.86.0
 packaging==25.0
 passlib==1.7.4
