@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reezy - Social Auth Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .auth-buttons {
+            margin: 20px 0;
+        }
+        .auth-btn {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 10px;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            transition: opacity 0.3s;
+        }
+        .auth-btn:hover {
+            opacity: 0.9;
+        }
+        .google {
+            background-color: #DB4437;
+        }
+        .github {
+            background-color: #333;
+        }
+        .facebook {
+            background-color: #4267B2;
+        }
+        .token-display {
+            margin-top: 30px;
+            padding: 15px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+            word-break: break-all;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <h1>Reezy - Social Authentication Test</h1>
+    <p>Test the social authentication flow by clicking one of the buttons below:</p>
+    
+    <div class="auth-buttons">
+        <a href="/api/v1/auth/google" class="auth-btn google">Login with Google</a>
+        <a href="/api/v1/auth/github" class="auth-btn github">Login with GitHub</a>
+        <a href="/api/v1/auth/facebook" class="auth-btn facebook">Login with Facebook</a>
+    </div>
+
+    <div id="token-display" class="token-display" style="display: none;">
+        <h3>Authentication Successful!</h3>
+        <p>Your JWT Token:</p>
+        <pre id="jwt-token"></pre>
+    </div>
+
+    <script>
+        // Check for token in URL after redirect
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            
+            if (token) {
+                // Display the token
+                document.getElementById('jwt-token').textContent = token;
+                document.getElementById('token-display').style.display = 'block';
+                
+                // Store token in local storage
+                localStorage.setItem('jwt_token', token);
+                
+                // Clean up URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } else {
+                // Check local storage for existing token
+                const storedToken = localStorage.getItem('jwt_token');
+                if (storedToken) {
+                    document.getElementById('jwt-token').textContent = storedToken;
+                    document.getElementById('token-display').style.display = 'block';
+                }
+            }
+        });
+    </script>
+</body>
+</html>

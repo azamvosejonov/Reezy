@@ -1,0 +1,19 @@
+[2025-06-12T11:43:31.776694] USER: salom
+[2025-06-12T11:43:31.776694] BOT: Salom! Sizga qanday yordam bera olaman?
+--------------------------------------------------
+[2025-06-12T11:43:40.516889] USER: post nima
+[2025-06-12T11:43:40.516889] BOT: {'uz': 'Kechirasiz, bu savolga aniq javob topa olmadim. Iltimos, PyTorch haqida aniqroq savol bering (masalan, tensorlar, autograd, neyron tarmoqlar, DataLoader, CUDA, optimizer yoki torchvision haqida). Manba: https://pytorch.org/docs/stable/index.html'}
+--------------------------------------------------
+[2025-06-12T11:44:01.799493] USER: tensorlar
+[2025-06-12T11:44:01.799493] BOT: Tensor - PyTorchning asosiy ma'lumot tuzilmasi bo'lib, ko'p o'lchovli massivlarni ifodalaydi (https://pytorch.org/docs/stable/tensors.html).
+
+        Asosiy xususiyatlar:
+        - GPU tezlashuvini qo'llab-quvvatlaydi
+        - Avtomatik differensiallanish (autograd) uchun ishlatiladi
+        - NumPy massivlariga o'xshaydi, lekin GPU'da ishlaydi
+
+        Misol:
+        import torch
+        x = torch.tensor([1, 2, 3])  # 1D tensor yaratish
+        
+--------------------------------------------------
