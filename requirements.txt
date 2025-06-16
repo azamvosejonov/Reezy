@@ -67,7 +67,6 @@ Mako==1.3.10
 MarkupSafe==3.0.2
 mpmath==1.3.0
 multidict==6.4.4
-myapp==0.1.dev0
 networkx==3.3
 numpy==2.1.2
 oauthlib==3.2.2
