@@ -5,10 +5,11 @@ import os
 import sys
 from typing import Any, Dict, Type
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/reezy")
 
+# Remove SQLite-specific argument for PostgreSQL
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False},
+    SQLALCHEMY_DATABASE_URL,
     pool_pre_ping=True
 )
 
