@@ -105,7 +105,6 @@ pytz==2025.1
 PyYAML==6.0.2
 redis==5.0.4
 # Editable install with no version control (reezy==0.1.0)
--e /home/kali/Desktop/yaratilgan_narsalar/Reezy
 regex==2024.11.6
 requests==2.32.3
 requests-oauthlib==2.0.0
