@@ -40,7 +40,6 @@ async-timeout==4.0.3
 chardet>=3.0.4
 yarl==1.9.4
 aioredis==2.0.1
-python-jose==3.3.0
 passlib==1.7.4
 bcrypt==4.0.1
 python-multipart==0.0.6
@@ -112,7 +111,6 @@ pytest==8.4.0
 pytest-cov==6.2.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
-python-jose==3.5.0
 python-magic==0.4.27
 python-multipart==0.0.20
 python-social-auth==0.3.6
