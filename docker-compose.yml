@@ -40,7 +40,18 @@ services:
   celery:
     build: .
     restart: always
-    command: celery -A celery_app worker --loglevel=info
+    command: celery -A main_tasks worker --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/reezy
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+  celery-beat:
+    build: .
+    restart: always
+    command: celery -A main_tasks beat --loglevel=info
     volumes:
       - .:/app
     environment:
@@ -50,17 +61,7 @@ services:
       - db
       - redis
 
-  celery-beat:
-    build: .
-    restart: always
-    command: celery -A celery_app beat --loglevel=info
-    volumes:
-      - .:/app
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/reezy
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - db
+
       - redis
 
 volumes:

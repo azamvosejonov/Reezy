@@ -8,8 +8,15 @@ celery = Celery(
     __name__,
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=['main_tasks', 'tasks.post_tasks']  # Include tasks from both files
+    include=['main_tasks', 'tasks.post_tasks']
 )
+
+# Register tasks explicitly
+celery.register_task(update_data)
+celery.register_task(cleanup_old_media)
+celery.register_task(create_post_task)
+celery.register_task(process_mentions)
+celery.register_task(generate_video_thumbnail)
 
 celery.conf.update(
     task_serializer='json',
