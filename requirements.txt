@@ -40,7 +40,6 @@ async-timeout==4.0.3
 chardet>=3.0.4
 yarl==1.9.4
 aioredis==2.0.1
-pydantic==2.5.3
 pydantic-settings==2.1.0
 python-jose==3.3.0
 passlib==1.7.4
@@ -102,7 +101,7 @@ protobuf==5.29.5
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycparser==2.22
-pydantic==2.11.5
+pydantic>=2.5.3
 pydantic-settings==2.9.1
 pydantic_core==2.33.2
 Pygments==2.19.1
