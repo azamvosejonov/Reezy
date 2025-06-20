@@ -50,6 +50,43 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  celery:
+    build: .
+    restart: unless-stopped
+    command: celery -A app worker -l INFO
+    env_file:
+      - .env
+    environment:
+      - C_FORCE_ROOT=true
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build: .
+    restart: unless-stopped
+    command: celery -A app beat --loglevel=INFO --scheduler=celery.beat.PersistentScheduler
+    env_file:
+      - .env
+    environment:
+      - C_FORCE_ROOT=true
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./celerybeat-schedule:/app/celerybeat-schedule
+    ports:
+      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
