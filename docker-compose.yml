@@ -40,7 +40,7 @@ services:
   celery:
     build: .
     restart: always
-    command: celery -A main_tasks worker --loglevel=info
+    command: celery -A celery_app worker --loglevel=info
     volumes:
       - .:/app
     environment:
@@ -51,7 +51,7 @@ services:
   celery-beat:
     build: .
     restart: always
-    command: celery -A main_tasks beat --loglevel=info
+    command: celery -A celery_app beat --loglevel=info
     volumes:
       - .:/app
     environment:

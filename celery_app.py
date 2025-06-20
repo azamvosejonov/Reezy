@@ -1,9 +1,9 @@
 from celery import Celery
 from celery.schedules import crontab
 from config import settings
-from main_tasks import update_data
-from tasks.post_tasks import cleanup_old_media, create_post_task, process_mentions, generate_video_thumbnail
+from celery import Celery
 
+# Create Celery app
 celery = Celery(
     __name__,
     broker=settings.CELERY_BROKER_URL,
@@ -11,12 +11,24 @@ celery = Celery(
     include=['main_tasks', 'tasks.post_tasks']
 )
 
-# Register tasks explicitly
-celery.register_task(update_data)
-celery.register_task(cleanup_old_media)
-celery.register_task(create_post_task)
-celery.register_task(process_mentions)
-celery.register_task(generate_video_thumbnail)
+# Configure Celery
+celery.conf.update(
+    task_serializer='json',
+    result_serializer='json',
+    accept_content=['json'],
+    timezone='Asia/Tashkent',
+    enable_utc=True,
+    beat_schedule={
+        'update-data-every-30-minutes': {
+            'task': 'main_tasks.update_data',
+            'schedule': 1800.0,  # 30 minutes
+        },
+        'cleanup-old-media-every-day': {
+            'task': 'tasks.post_tasks.cleanup_old_media',
+            'schedule': 86400.0,  # 24 hours
+        },
+    }
+)
 
 celery.conf.update(
     task_serializer='json',

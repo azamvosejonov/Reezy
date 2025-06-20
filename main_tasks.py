@@ -1,4 +1,6 @@
-from celery_app import celery
+from celery import Celery
+
+celery = Celery()
 
 @celery.task
 def update_data():
