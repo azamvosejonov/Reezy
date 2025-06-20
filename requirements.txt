@@ -78,7 +78,7 @@ multidict>=6.0.4
 networkx==3.3
 numpy==2.1.2
 oauthlib==3.2.2
-oci==2.154.1
+oci
 oci-cli==3.59.0
 openai==1.86.0
 packaging==25.0
