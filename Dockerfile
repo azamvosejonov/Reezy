@@ -53,6 +53,10 @@ WORKDIR /app
 RUN mkdir -p /app/uploads /app/media /app/static && \
     chown -R appuser:appuser /app
 
+
+RUN touch /app/celerybeat-schedule/celerybeat-schedule && \
+    chmod 666 /app/celerybeat-schedule/celerybeat-schedule
+
 # Copy project files
 COPY --chown=appuser:appuser . .
 
