@@ -56,8 +56,9 @@ RUN mkdir -p /app/uploads /app/media /app/static /app/celerybeat-schedule && \
     chown -R appuser:appuser /app
 
 # Use Redis for celerybeat schedule instead of file-based storage
-RUN rm -f /app/celerybeat-schedule/celerybeat-schedule.db && \
-    chown appuser:appuser /app/celerybeat-schedule/celerybeat-schedule.db
+RUN if [ -f "/app/celerybeat-schedule/celerybeat-schedule.db" ]; then \
+    rm -f /app/celerybeat-schedule/celerybeat-schedule.db; \
+    fi
 
 # Add app directory to PYTHONPATH
 ENV PYTHONPATH=/app:$PYTHONPATH

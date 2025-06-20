@@ -9,8 +9,7 @@ app = Celery(
 
 # Configure Redis as the scheduler
 app.conf.update(
-    beat_scheduler='celery.beat:PersistentScheduler',
-    beat_schedule_filename='redis://redis:6379/0'
+    beat_scheduler='celery.beat:PersistentScheduler'
 )
 
 app.conf.beat_schedule = {
