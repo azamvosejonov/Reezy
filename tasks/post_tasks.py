@@ -9,9 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
 import shutil
 
-from app.tasks.celery_config import celery_app
 
-from app.models.user import User
+from models.user import User
 from config import settings
 from database import SessionLocal
 from models import Post, Notification

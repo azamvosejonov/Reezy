@@ -1,10 +1,10 @@
 from celery import Celery
 
 app = Celery(
-    'tasks',
+    'reezy',
     broker='redis://redis:6379/0',
     backend='redis://redis:6379/0',
-    include=['tasks']
+    include=['tasks.post_tasks']
 )
 
 app.conf.beat_schedule = {
