@@ -9,13 +9,14 @@ from sqlalchemy import and_
 
 import models, schemas
 from database import SessionLocal
+from routers.auth import get_current_user
 from schemas.livestream import (
     LiveStream, LiveStreamComment, LiveStreamCreate, LiveStreamUpdate,
     LiveStreamCommentCreate, LiveStreamCommentInDB, LiveStreamList
 )
 
 router = APIRouter(
-    prefix="/livestreams",
+    prefix="/api/v1/livestreams",
     tags=["Livestreams"],
     responses={
         401: {"description": "Unauthorized"},
@@ -118,8 +119,7 @@ def check_blocked_users(db: Session, user_id: int, target_id: int) -> bool:
     description="""
     Start a new livestream session.
     
-    - **user_id**: ID of the user starting the stream (required)
-    - Returns the created livestream with initial stats
+    Returns the created livestream with initial stats
     
     Note: A user can only have one active livestream at a time.
     """,
@@ -129,13 +129,13 @@ def check_blocked_users(db: Session, user_id: int, target_id: int) -> bool:
     }
 )
 async def start_livestream(
-    user_id: int = Query(..., description="The ID of the user starting the stream"), 
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """Starts a new livestream."""
-    # Check if user already has an active livestream
+    # Check if current user already has an active livestream
     active_stream = db.query(models.LiveStream).filter(
-        models.LiveStream.host_id == user_id,
+        models.LiveStream.host_id == current_user.id,
         models.LiveStream.status == "active"
     ).first()
     
@@ -145,19 +145,36 @@ async def start_livestream(
             detail="You already have an active livestream"
         )
     
-    new_livestream = models.LiveStream(host_id=user_id, status="active")
+    new_livestream = models.LiveStream(host_id=current_user.id, status="active")
     db.add(new_livestream)
     db.commit()
     db.refresh(new_livestream)
     
     # Convert to Pydantic model to include computed fields
-    return LiveStream(
-        **new_livestream.__dict__,
-        host={"id": user_id},  # Will be populated with user data in the response model
-        like_count=0,
-        comment_count=0,
-        is_liked=False
-    )
+    # Get host user info
+    host = db.query(models.User).filter(models.User.id == current_user.id).first()
+    
+    return {
+        "id": new_livestream.id,
+        "host_id": current_user.id,
+        "title": None,
+        "description": None,
+        "thumbnail_url": None,
+        "is_live": True,
+        "start_time": new_livestream.start_time,
+        "end_time": None,
+        "status": "active",
+        "viewer_count": 0,
+        "saved_post_id": None,
+        "host": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "profile_picture": host.profile_picture if host else None
+        },
+        "like_count": 0,
+        "comment_count": 0,
+        "is_liked": False
+    }
 
 @router.post(
     "/{livestream_id}/end", 
@@ -168,13 +185,15 @@ async def start_livestream(
     
     - **livestream_id**: ID of the livestream to end (required)
     - **save_as_post**: Whether to save the livestream as a post (default: false)
-    - **user_id**: ID of the user ending the stream (must be the host)
     
     Returns the ended livestream with updated status and stats.
+    
+    Note: Requires authentication. Only the livestream host can end the livestream.
     """,
     responses={
         200: {"description": "Livestream ended successfully"},
         400: {"description": "Livestream has already ended"},
+        401: {"description": "Unauthorized - Missing or invalid JWT token"},
         403: {"description": "Not authorized to end this livestream"},
         404: {"description": "Livestream not found"}
     }
@@ -182,16 +201,25 @@ async def start_livestream(
 async def end_livestream(
     livestream_id: int,
     save_as_post: bool = Query(False, description="Set to true to save the livestream as a post."),
-    user_id: int = Query(..., description="The ID of the user ending the stream"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """Ends a livestream and optionally saves it as a post."""
     # Get livestream with host relationship loaded
+    # First check if user is authenticated
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    # Then check if livestream exists and user is the host
     livestream = db.query(models.LiveStream).options(
         joinedload(models.LiveStream.host)
     ).filter(
         models.LiveStream.id == livestream_id, 
-        models.LiveStream.host_id == user_id
+        models.LiveStream.host_id == current_user.id
     ).first()
 
     if not livestream:
@@ -206,7 +234,7 @@ async def end_livestream(
         new_post = models.Post(
             content=f"Check out the recording of my live stream from {livestream.start_time.strftime('%Y-%m-%d')}!",
             media_url=json.dumps({"type": "video", "url": f"/recordings/livestream_{livestream.id}.mp4"}), # Placeholder
-            owner_id=user_id
+            owner_id=current_user.id
         )
         db.add(new_post)
         db.flush()
@@ -248,24 +276,26 @@ class CommentResponse(LiveStreamComment):
     Retrieves comments for a specific livestream with pagination.
     
     - **livestream_id**: ID of the livestream
-    - **current_user_id**: ID of the current user for permission checks
     - **skip**: Number of comments to skip (for pagination)
     - **limit**: Maximum number of comments to return (max 100)
     
     Returns comments sorted by creation date (newest first)
+    
+    Note: Requires authentication. The authenticated user's ID is used for permission checks.
     """,
     responses={
         200: {"description": "List of comments"},
+        401: {"description": "Unauthorized - Missing or invalid JWT token"},
         403: {"description": "Access denied - user is blocked"},
         404: {"description": "Livestream not found"}
     }
 )
 async def get_livestream_comments(
     livestream_id: int = PathParam(..., description="ID of the livestream to get comments for"),
-    current_user_id: int = Query(..., description="Current user's ID for permission checks"),
     skip: int = Query(0, ge=0, description="Number of comments to skip"),
     limit: int = Query(100, ge=1, le=100, description="Maximum number of comments to return"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     # Check if livestream exists and is active
     livestream = db.query(models.LiveStream).filter(
@@ -280,7 +310,7 @@ async def get_livestream_comments(
         )
     
     # Check block status between users
-    if check_blocked_users(db, current_user_id, livestream.host_id):
+    if check_blocked_users(db, current_user.id, livestream.host_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have permission to view comments on this livestream"
@@ -305,8 +335,8 @@ async def get_livestream_comments(
             continue  # Skip comments without user data
             
         # Check permissions
-        is_owner = comment.user_id == current_user_id
-        can_delete = is_owner or current_user_id == livestream.host_id
+        is_owner = comment.user_id == current_user.id
+        can_delete = is_owner or current_user.id == livestream.host_id
         
         # Create response object
         result.append(CommentResponse(
@@ -348,12 +378,14 @@ async def get_livestream_comments(
     
     - **livestream_id**: ID of the livestream to comment on (required)
     - **text**: The comment text (required)
-    - **current_user_id**: ID of the user posting the comment (required)
     
-    Returns the created comment with user info.
+    Returns the created comment with user info and permissions.
+    
+    Note: Requires authentication. The authenticated user's ID is used for posting the comment.
     """,
     responses={
         201: {"description": "Comment posted successfully"},
+        401: {"description": "Unauthorized - Missing or invalid JWT token"},
         403: {"description": "Not authorized to comment on this livestream"},
         404: {"description": "Livestream not found or has ended"}
     }
@@ -361,15 +393,10 @@ async def get_livestream_comments(
 async def create_livestream_comment(
     livestream_id: int,
     comment: LiveStreamCommentCreate,
-    current_user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """Add a comment to a livestream."""
-    # Check if user exists
-    user = db.query(models.User).filter(models.User.id == current_user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
     # Check if livestream exists and is active
     livestream = db.query(models.LiveStream).filter(
         models.LiveStream.id == livestream_id,
@@ -380,13 +407,13 @@ async def create_livestream_comment(
         raise HTTPException(status_code=404, detail="Active livestream not found")
     
     # Check if current user is blocked by the host or vice versa
-    if check_blocked_users(db, current_user_id, livestream.host_id):
+    if check_blocked_users(db, current_user.id, livestream.host_id):
         raise HTTPException(status_code=403, detail="You cannot comment on this livestream")
     
     # Create comment
     db_comment = models.LiveStreamComment(
         text=comment.text,
-        user_id=current_user_id,
+        user_id=current_user.id,
         livestream_id=livestream_id
     )
     db.add(db_comment)
@@ -401,27 +428,34 @@ async def create_livestream_comment(
             "text": db_comment.text,
             "created_at": db_comment.created_at.isoformat(),
             "user": {
-                "id": user.id,
-                "username": user.username,
-                "profile_picture": user.profile_picture or ""
+                "id": current_user.id,
+                "username": current_user.username,
+                "profile_picture": current_user.profile_picture or ""
             }
         }
     }), livestream_id)
     
-    return LiveStreamComment(
-        **db_comment.__dict__,
+    # Return response with required fields
+    return CommentResponse(
+        id=db_comment.id,
+        text=db_comment.text,
+        created_at=db_comment.created_at,
+        user_id=db_comment.user_id,
+        livestream_id=db_comment.livestream_id,
         user={
-            'id': user.id,
-            'username': user.username,
-            'profile_picture': user.profile_picture or ""
-        }
+            'id': current_user.id,
+            'username': current_user.username,
+            'profile_picture': current_user.profile_picture or ""
+        },
+        is_owner=True,  # The current user is the owner of this comment
+        can_delete=True  # The current user can delete their own comment
     )
 
 @router.delete("/comments/{comment_id}", status_code=204)
 async def delete_livestream_comment(
     comment_id: int,
-    current_user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """Delete a comment. Only the comment author or livestream host can delete."""
     comment = db.query(models.LiveStreamComment).options(
@@ -434,7 +468,7 @@ async def delete_livestream_comment(
         raise HTTPException(status_code=404, detail="Comment not found")
     
     # Check if current user is the comment author or livestream host
-    if comment.user_id != current_user_id and comment.livestream.host_id != current_user_id:
+    if comment.user_id != current_user.id and comment.livestream.host_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
     
     db.delete(comment)
@@ -449,27 +483,24 @@ async def delete_livestream_comment(
     Toggle like on a livestream.
     
     - **livestream_id**: ID of the livestream to like/unlike (required)
-    - **current_user_id**: ID of the user liking/unliking (required)
     
     Returns the current like status and total like count.
+    
+    Note: Requires authentication. The authenticated user's ID is used for liking/unliking.
     """,
     responses={
         200: {"description": "Like status toggled successfully"},
+        401: {"description": "Unauthorized - Missing or invalid JWT token"},
         403: {"description": "Not authorized to like this livestream"},
         404: {"description": "Livestream not found or has ended"}
     }
 )
 async def like_livestream(
     livestream_id: int,
-    current_user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """Like or unlike a livestream."""
-    # Check if user exists
-    user = db.query(models.User).filter(models.User.id == current_user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
     # Check if livestream exists and is active
     livestream = db.query(models.LiveStream).filter(
         models.LiveStream.id == livestream_id,
@@ -480,12 +511,12 @@ async def like_livestream(
         raise HTTPException(status_code=404, detail="Active livestream not found")
     
     # Check if current user is blocked by the host or vice versa
-    if check_blocked_users(db, current_user_id, livestream.host_id):
+    if check_blocked_users(db, current_user.id, livestream.host_id):
         raise HTTPException(status_code=403, detail="You cannot like this livestream")
     
     # Check if already liked
     like = db.query(models.LiveStreamLike).filter(
-        models.LiveStreamLike.user_id == current_user_id,
+        models.LiveStreamLike.user_id == current_user.id,
         models.LiveStreamLike.livestream_id == livestream_id
     ).first()
     
@@ -496,7 +527,7 @@ async def like_livestream(
     else:
         # Like
         like = models.LiveStreamLike(
-            user_id=current_user_id,
+            user_id=current_user.id,
             livestream_id=livestream_id
         )
         db.add(like)
@@ -514,9 +545,9 @@ async def like_livestream(
         await manager.broadcast(json.dumps({
             "type": "new_like",
             "user": {
-                "id": user.id,
-                "username": user.username,
-                "profile_picture": user.profile_picture or ""
+                "id": current_user.id,
+                "username": current_user.username,
+                "profile_picture": current_user.profile_picture or ""
             },
             "like_count": like_count
         }), livestream_id)
@@ -526,10 +557,10 @@ async def like_livestream(
 @router.get("/{livestream_id}/likes", response_model=List[Dict[str, Any]])
 async def get_livestream_likes(
     livestream_id: int,
-    current_user_id: int = Query(..., description="Current user's ID"),
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """Get users who liked a livestream."""
     # Check if livestream exists
@@ -541,7 +572,7 @@ async def get_livestream_likes(
         raise HTTPException(status_code=404, detail="Livestream not found")
     
     # Check if current user is blocked by the host or vice versa
-    if check_blocked_users(db, current_user_id, livestream.host_id):
+    if check_blocked_users(db, current_user.id, livestream.host_id):
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Get likes with user info

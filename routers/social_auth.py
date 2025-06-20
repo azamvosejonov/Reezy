@@ -8,13 +8,14 @@ import json
 import os
 from datetime import datetime, timedelta
 
+from main import get_current_user
 from models import User
 from models.social_account import SocialAccount
 from database import get_db
 from jose import jwt
 from passlib.context import CryptContext
 
-router = APIRouter(tags=["Social Authentication"])
+router = APIRouter()
 
 # Security
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")
@@ -90,7 +91,10 @@ def get_or_create_user(db: Session, email: str, username: str, provider: str, pr
     return user
 
 @router.get("/auth/{provider}")
-async def social_auth(provider: str):
+async def social_auth(
+    provider: str,
+    current_user: User = Depends(get_current_user)
+):
     if provider == "google":
         auth_url = f"{GOOGLE_AUTH_URL}?client_id={GOOGLE_CLIENT_ID}&redirect_uri={REDIRECT_URI.format(provider=provider)}&response_type=code&scope=openid%20profile%20email"
     elif provider == "github":
@@ -103,7 +107,12 @@ async def social_auth(provider: str):
     return {"auth_url": auth_url}
 
 @router.get("/auth/callback/{provider}")
-async def social_auth_callback(provider: str, code: str, db: Session = Depends(get_db)):
+async def social_auth_callback(
+    provider: str,
+    code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     try:
         if provider == "google":
             # Exchange code for access token

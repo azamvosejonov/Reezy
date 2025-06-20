@@ -1,0 +1,48 @@
+                   List of relations
+ Schema |           Name            | Type  |  Owner   
+--------+---------------------------+-------+----------
+ public | advertisements            | table | postgres
+ public | ai_usage                  | table | postgres
+ public | blocked_posts             | table | postgres
+ public | blocks                    | table | postgres
+ public | call_participants         | table | postgres
+ public | calls                     | table | postgres
+ public | channel_comments          | table | postgres
+ public | channel_messages          | table | postgres
+ public | channel_subscribers       | table | postgres
+ public | channels                  | table | postgres
+ public | coin_transactions         | table | postgres
+ public | comments                  | table | postgres
+ public | follow_requests           | table | postgres
+ public | followers                 | table | postgres
+ public | group_admins              | table | postgres
+ public | group_members             | table | postgres
+ public | group_message_attachments | table | postgres
+ public | group_messages            | table | postgres
+ public | groups                    | table | postgres
+ public | likes                     | table | postgres
+ public | livestream_comments       | table | postgres
+ public | livestream_likes          | table | postgres
+ public | livestreams               | table | postgres
+ public | message_attachments       | table | postgres
+ public | messages                  | table | postgres
+ public | notifications             | table | postgres
+ public | password_reset_tokens     | table | postgres
+ public | post_likes                | table | postgres
+ public | post_saves                | table | postgres
+ public | post_views                | table | postgres
+ public | posts                     | table | postgres
+ public | reel_comments             | table | postgres
+ public | reel_likes                | table | postgres
+ public | reels                     | table | postgres
+ public | social_accounts           | table | postgres
+ public | stickers                  | table | postgres
+ public | stories                   | table | postgres
+ public | story_comments            | table | postgres
+ public | story_likes               | table | postgres
+ public | story_views               | table | postgres
+ public | user_coins                | table | postgres
+ public | user_stickers             | table | postgres
+ public | users                     | table | postgres
+(43 rows)
+

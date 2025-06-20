@@ -11,11 +11,14 @@ from schemas import channel_message as channel_message_schemas
 from schemas.message import MessageType
 from utils.file_utils import save_upload_file, SUPPORTED_FILE_TYPES
 from database import get_db
+from routers.auth import get_current_user
 
-router = APIRouter(prefix="/api/channels", tags=["channels"])
+router = APIRouter(prefix="/channels/api/channels")
 
 # Search channels by name or description
+# (This comment will be removed as we've added the actual endpoint above)
 
+# Process and save channel message attachments.
 async def process_channel_attachments(
     files: List[UploadFile], 
     db: Session,
@@ -47,7 +50,7 @@ async def process_channel_attachments(
 
 # Create a new channel
 @router.post("/", response_model=schemas.ChannelResponse, status_code=status.HTTP_201_CREATED)
-def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(get_db)):
+def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """
     Create a new channel.
     Only the creator can post messages to the channel.
@@ -63,10 +66,8 @@ def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(get_db)
             detail="Channel with this name already exists"
         )
     
-    # Get creator user first to include in response
-    creator = db.query(models.User).filter(
-        models.User.id == channel.creator_id
-    ).first()
+    # Use current user as creator
+    creator = current_user
     
     if not creator:
         raise HTTPException(
@@ -79,7 +80,7 @@ def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(get_db)
             name=channel.name,
             description=channel.description,
             image=channel.image,
-            creator_id=channel.creator_id,
+            creator_id=current_user.id,
             created_at=datetime.utcnow(),
             is_active=True
         )
@@ -121,11 +122,11 @@ def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(get_db)
         )
 
 # Subscribe to a channel
-@router.post("/{channel_id}/subscribe/{user_id}", status_code=status.HTTP_200_OK)
+@router.post("/{channel_id}/subscribe", status_code=status.HTTP_200_OK)
 def subscribe_channel(
     channel_id: int,
-    user_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Subscribe a user to a channel.
@@ -134,7 +135,7 @@ def subscribe_channel(
     existing_sub = db.query(models.ChannelSubscriber).filter(
         and_(
             models.ChannelSubscriber.channel_id == channel_id,
-            models.ChannelSubscriber.user_id == user_id
+            models.ChannelSubscriber.user_id == current_user.id
         )
     ).first()
     
@@ -147,7 +148,7 @@ def subscribe_channel(
     # Create new subscription
     subscription = models.ChannelSubscriber(
         channel_id=channel_id,
-        user_id=user_id,
+        user_id=current_user.id,
         subscribed_at=datetime.utcnow()
     )
     
@@ -162,8 +163,8 @@ async def create_channel_message(
     channel_id: int,
     text: Optional[str] = Form(None),
     files: List[UploadFile] = File([]),
-    from_user_id: int = Form(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Create a new message in a channel.
@@ -183,7 +184,7 @@ async def create_channel_message(
     subscription = db.query(models.ChannelSubscriber).filter(
         and_(
             models.ChannelSubscriber.channel_id == channel_id,
-            models.ChannelSubscriber.user_id == from_user_id
+            models.ChannelSubscriber.user_id == current_user.id
         )
     ).first()
     
@@ -225,7 +226,7 @@ async def create_channel_message(
     db_message = models.ChannelMessage(
         text=text,
         message_type=message_type,
-        from_user_id=from_user_id,
+        from_user_id=current_user.id,
         channel_id=channel_id
     )
     
@@ -271,12 +272,12 @@ async def create_channel_message(
 
 # Get channel messages (subscribers only)
 @router.get("/{channel_id}/messages", response_model=List[channel_message_schemas.ChannelMessage])
-async def get_channel_messages(
+def get_channel_messages(
     channel_id: int,
-    current_user_id: int = Query(..., description="Current user's ID"),
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Get messages from a channel.
@@ -296,11 +297,11 @@ async def get_channel_messages(
             detail="Channel not found or inactive"
         )
     
-    # Check if user is a subscriber
+    # Check if current user is a subscriber
     subscription = db.query(models.ChannelSubscriber).filter(
         and_(
             models.ChannelSubscriber.channel_id == channel_id,
-            models.ChannelSubscriber.user_id == current_user_id
+            models.ChannelSubscriber.user_id == current_user.id
         )
     ).first()
     
@@ -349,12 +350,12 @@ async def get_channel_messages(
     return response
 
 # Add a comment to a channel message (subscribers only)
-@router.post("/messages/{message_id}/comments", response_model=schemas.ChannelMessageResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{channel_id}/messages/{message_id}/comments", response_model=channel_message_schemas.ChannelMessage)
 def add_comment_to_message(
     message_id: int,
     comment: schemas.ChannelMessageCreate,  # Using same schema for messages and comments
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Add a comment to a channel message.
@@ -378,7 +379,7 @@ def add_comment_to_message(
     is_subscribed = db.query(models.ChannelSubscriber).filter(
         and_(
             models.ChannelSubscriber.channel_id == message.channel_id,
-            models.ChannelSubscriber.user_id == user_id
+            models.ChannelSubscriber.user_id == current_user.id
         )
     ).first()
     
@@ -391,7 +392,7 @@ def add_comment_to_message(
     # Create and save the comment
     db_comment = models.ChannelComment(
         message_id=message_id,
-        user_id=user_id,
+        user_id=current_user.id,
         text=comment.text,
         created_at=datetime.utcnow()
     )
@@ -403,11 +404,11 @@ def add_comment_to_message(
     return db_comment
 
 # Delete a channel (creator only)
-@router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{channel_id}", status_code=status.HTTP_200_OK)
 def delete_channel(
     channel_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Delete a channel and all its messages and comments.
@@ -425,7 +426,7 @@ def delete_channel(
         )
     
     # Check if user is the channel creator
-    if channel.creator_id != user_id:
+    if channel.creator_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the channel creator can delete the channel"
@@ -458,12 +459,12 @@ def delete_channel(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # Delete a single message (creator only)
-@router.delete("/{channel_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{channel_id}/messages/{message_id}", status_code=status.HTTP_200_OK)
 def delete_channel_message(
     channel_id: int,
     message_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Delete a message from a channel.
@@ -491,7 +492,7 @@ def delete_channel_message(
         )
     
     # Check if user is the channel creator
-    if message.channel.creator_id != user_id:
+    if message.channel.creator_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the channel creator can delete messages"
@@ -516,11 +517,11 @@ def delete_channel_message(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # Clear all messages in a channel (creator only)
-@router.delete("/{channel_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{channel_id}/clear-messages", status_code=status.HTTP_200_OK)
 def clear_channel_messages(
     channel_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Clear all messages in a channel.
@@ -538,7 +539,7 @@ def clear_channel_messages(
         )
     
     # Check if user is the channel creator
-    if channel.creator_id != user_id:
+    if channel.creator_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the channel creator can clear messages"
@@ -554,11 +555,11 @@ def clear_channel_messages(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # Get comments for a message (subscribers only)
-@router.get("/messages/{message_id}/comments", response_model=List[schemas.ChannelMessageResponse])
+@router.get("/{channel_id}/messages/{message_id}/comments", response_model=List[channel_message_schemas.ChannelMessage])
 def get_message_comments(
     message_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Get comments for a channel message.

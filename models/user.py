@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 from config import settings
 from database import Base
 from .sticker import UserCoin
+from .base_models import UserSettings
 
 # Import call models for type checking
 if TYPE_CHECKING:
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from .follow_request import FollowRequest
     from .social_account import SocialAccount
     from .blocked_post import BlockedPost
+    from .user_settings import UserSettings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -43,12 +45,31 @@ class User(Base):
     __tablename__ = 'users'  # Base table name without prefix
     __table_args__ = {'schema': settings.SQLALCHEMY_DB_TABLE_PREFIX.rstrip('_') if settings.SQLALCHEMY_DB_TABLE_PREFIX else None}
 
+    # One-to-one relationship with UserSettings
+    settings = relationship(
+        "UserSettings",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )
+
+    # One-to-many relationship with Like model
+    likes = relationship(
+        "Like",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        overlaps="liked_posts"
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(100), nullable=True)
     bio = Column(Text, nullable=True)
+    
+    # AI Usage
+    ai_usage = relationship("AIUsage", back_populates="user", uselist=False)
     profile_picture = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
@@ -92,6 +113,14 @@ class User(Base):
         back_populates="owner",
         cascade="all, delete-orphan",
         overlaps="liked_posts"
+    )
+    
+    # One-to-one relationship with UserSettings
+    settings = relationship(
+        "UserSettings",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan"
     )
     
     # One-to-many relationship with PostSave model
@@ -142,10 +171,29 @@ class User(Base):
     )
 
     # Story and Reel relationships
-    stories = relationship("Story", back_populates="owner", cascade="all, delete-orphan")
-    story_views = relationship("StoryView", back_populates="owner", cascade="all, delete-orphan")
-    story_likes = relationship("StoryLike", back_populates="owner", cascade="all, delete-orphan")
-    story_comments = relationship("StoryComment", back_populates="owner", cascade="all, delete-orphan")
+    stories = relationship(
+        "Story", 
+        back_populates="user", 
+        cascade="all, delete-orphan"
+    )
+    story_views = relationship(
+        "StoryView", 
+        back_populates="user", 
+        cascade="all, delete-orphan",
+        foreign_keys="StoryView.owner_id"
+    )
+    story_likes = relationship(
+        "StoryLike", 
+        back_populates="user", 
+        cascade="all, delete-orphan",
+        foreign_keys="StoryLike.owner_id"
+    )
+    story_comments = relationship(
+        "StoryComment", 
+        back_populates="user", 
+        cascade="all, delete-orphan",
+        foreign_keys="StoryComment.owner_id"
+    )
     reels = relationship("Reel", back_populates="owner", cascade="all, delete-orphan")
     reel_likes = relationship("ReelLike", back_populates="owner", cascade="all, delete-orphan")
     reel_comments = relationship("ReelComment", back_populates="owner", cascade="all, delete-orphan")

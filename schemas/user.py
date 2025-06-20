@@ -37,13 +37,11 @@ class PasswordResetRequest(BaseModel):
 
 class VerifyCodeRequest(BaseModel):
     """Schema for verification code request."""
-    email: EmailStr
-    code: str = Field(..., min_length=6, max_length=6, pattern=r'^\d{6}$')
+    code: str = Field(..., min_length=6, max_length=10, pattern=r'^\d+$')
     
     class Config:
         json_schema_extra = {
             "example": {
-                "email": "user@example.com",
                 "code": "123456"
             }
         }

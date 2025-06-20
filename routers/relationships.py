@@ -4,15 +4,17 @@ from typing import List
 from pydantic import BaseModel
 from datetime import datetime
 
+import models
 from models import User, Follower
 from database import SessionLocal
 from schemas.user import UserResponse
+from routers.auth import get_current_user
 
 # Pydantic model for the follow request body
 class FollowRequest(BaseModel):
     followed_id: int
 
-router = APIRouter(prefix="/api/relationships", tags=["relationships"])
+router = APIRouter(prefix="/api/relationships")
 
 def get_db():
     db = SessionLocal()
@@ -21,15 +23,13 @@ def get_db():
     finally:
         db.close()
 
-# WARNING: Authentication is temporarily disabled for testing.
-# A hardcoded user ID (1) is used instead of an authenticated user.
-
 @router.post("/follow", status_code=status.HTTP_201_CREATED)
 async def follow_user(
     follow_request: FollowRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    follower_id = 1  # Hardcoded user ID for testing
+    follower_id = current_user.id
     followed_id = follow_request.followed_id
 
     if follower_id == followed_id:
@@ -69,9 +69,10 @@ async def follow_user(
 @router.delete("/unfollow/{followed_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def unfollow_user(
     followed_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    follower_id = 1  # Hardcoded user ID for testing
+    follower_id = current_user.id
 
     follow_to_delete = db.query(Follower).filter(
         Follower.follower_id == follower_id,
@@ -95,7 +96,8 @@ async def get_followers(
     user_id: int = Query(...), # user_id is now a query parameter
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -120,7 +122,8 @@ async def get_following(
     user_id: int = Query(...), # user_id is now a query parameter
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

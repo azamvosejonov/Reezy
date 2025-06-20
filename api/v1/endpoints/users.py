@@ -1,19 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
-from typing import List, Optional
 import logging
 
-
-from typing import List, Optional
-
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from database import SessionLocal
 from models.user import User
-from schemas.user import UserCreate, UserResponse, UserUpdate, PublicUserResponse, UserLogin
-from services.user_service import UserService
-from database import  SessionLocal
 from routers.auth import get_current_user, get_optional_current_user
+from schemas.user import UserResponse, UserUpdate, PublicUserResponse
+from services.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
 logger = logging.getLogger(__name__)
@@ -28,39 +22,7 @@ def get_db():
     finally:
         db.close()
 
-@router.get("/search", response_model=List[PublicUserResponse])
-async def search_users(
-    query: Optional[str] = Query(None, min_length=1, max_length=100),
-    limit: int = Query(10, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_optional_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Search for users by username or full name.
-    
-    - **query**: Search term (username or full name)
-    - **limit**: Maximum number of results to return (1-100)
-    - **offset**: Number of results to skip for pagination
-    """
-    try:
-        current_user_id = current_user.id if current_user else None
-        service = UserService(db)
-        return await service.search_users(
-            query=query,
-            limit=limit,
-            offset=offset,
-            current_user_id=current_user_id,
-            exclude_blocked=True
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error searching users: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while searching for users"
-        )
+
 
 
 @router.get("/{user_id}", response_model=PublicUserResponse)

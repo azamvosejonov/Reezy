@@ -10,8 +10,9 @@ import models, schemas
 from schemas import group as group_schemas
 from database import SessionLocal, get_db
 from utils.file_utils import save_upload_file, MAX_FILE_SIZE, SUPPORTED_FILE_TYPES
+from routers.auth import get_current_user
 
-router = APIRouter(prefix="/api/groups", tags=["groups"])
+router = APIRouter(prefix="/api/groups")
 
 async def process_group_attachments(
     files: List[UploadFile], 
@@ -44,7 +45,7 @@ async def process_group_attachments(
 
 # Create a new group
 @router.post("/", response_model=group_schemas.GroupInDB, status_code=status.HTTP_201_CREATED)
-def create_group(group: group_schemas.GroupCreate, db: Session = Depends(get_db)):
+def create_group(group: group_schemas.GroupCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """
     Create a new group.
     The creator automatically becomes the group admin and member.
@@ -53,7 +54,7 @@ def create_group(group: group_schemas.GroupCreate, db: Session = Depends(get_db)
     db_group = models.Group(
         name=group.name,
         description=group.description,
-        creator_id=group.creator_id,
+        creator_id=current_user.id,
         image=group.image
     )
     db.add(db_group)
@@ -82,8 +83,8 @@ def create_group(group: group_schemas.GroupCreate, db: Session = Depends(get_db)
 @router.delete("/{group_id}", status_code=status.HTTP_200_OK)
 def delete_group(
     group_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Delete a group.
@@ -101,8 +102,8 @@ def delete_group(
             detail="Group not found"
         )
     
-    # Check if user is the group creator
-    if group.creator_id != user_id:
+    # Check if current user is the group creator
+    if group.creator_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the group creator can delete the group"
@@ -134,22 +135,28 @@ def delete_group(
 async def send_group_message(
     group_id: int,
     content: Optional[str] = Form(None),
-    files: List[UploadFile] = File([]),
-    user_id: int = Form(...),
-    db: Session = Depends(get_db)
+    files: List[UploadFile] = File([], media_type='multipart/form-data'),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
-    # Check if message has content or files
+    # Handle empty file list from form data
+    files = [f for f in files if f and (hasattr(f, 'filename') and f.filename)]
+    # Check if message has any content (either text or files)
     if not content and not files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message must have either content or files"
         )
+        
+    # Set default message type to text if no files are present
+    if not files and not content:
+        content = ""  # Empty string for text-only messages
     
-    # Check if user is a member of the group
+    # Check if current user is a member of the group
     membership = db.query(models.GroupMember).filter(
         and_(
             models.GroupMember.group_id == group_id,
-            models.GroupMember.user_id == user_id
+            models.GroupMember.user_id == current_user.id
         )
     ).first()
     
@@ -176,7 +183,7 @@ async def send_group_message(
     # Create the message
     db_message = models.GroupMessage(
         content=content,
-        user_id=user_id,
+        user_id=current_user.id,
         group_id=group_id,
         message_type=message_type.value
     )
@@ -190,15 +197,15 @@ async def send_group_message(
         attachments = await process_group_attachments(files, db, db_message.id)
         db.commit()
     
-    # Get user info for response
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    # Get current user info for response
+    user = current_user
     
     # Format the response
     response = {
         "id": db_message.id,
         "content": db_message.content,
         "message_type": message_type.value,
-        "sender_id": user_id,
+        "sender_id": current_user.id,
         "group_id": group_id,
         "is_read": False,
         "is_edited": False,
@@ -206,10 +213,10 @@ async def send_group_message(
         "updated_at": db_message.created_at.isoformat(),
         "deleted_at": None,
         "sender": {
-            "id": user.id,
-            "username": user.username,
-            "full_name": user.full_name,
-            "avatar_url": user.avatar_url
+            "id": current_user.id,
+            "username": current_user.username,
+            "full_name": current_user.full_name,
+            "avatar_url": current_user.avatar_url
         },
         "attachments": [
             {
@@ -226,19 +233,19 @@ async def send_group_message(
     return response
 
 # Get group messages
-@router.get("/{group_id}/messages", response_model=List[group_schemas.GroupMessageInDB])
+@router.get("/{group_id}/messages", response_model=List[schemas.Message])
 def get_group_messages(
     group_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     # Check if user is a member of the group
     membership = db.query(models.GroupMember).filter(
         and_(
             models.GroupMember.group_id == group_id,
-            models.GroupMember.user_id == user_id
+            models.GroupMember.user_id == current_user.id
         )
     ).first()
     
@@ -258,49 +265,26 @@ def get_group_messages(
     return messages
 
 # Delete a single message
-@router.delete("/messages/{message_id}", status_code=status.HTTP_200_OK)
+@router.delete("/{group_id}/messages/{message_id}", status_code=status.HTTP_200_OK)
 def delete_group_message(
     message_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Delete a message from the group.
     Any group member can delete their own messages.
     """
     # Get the message with group information
-    message = db.query(models.GroupMessage).join(
-        models.Group,
-        models.Group.id == models.GroupMessage.group_id
-    ).filter(
-        models.GroupMessage.id == message_id
+    message = db.query(models.GroupMessage).filter(
+        models.GroupMessage.id == message_id,
+        models.GroupMessage.user_id == current_user.id
     ).first()
     
     if not message:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Message not found"
-        )
-    
-    # Check if user is a member of the group
-    is_member = db.query(models.GroupMember).filter(
-        and_(
-            models.GroupMember.group_id == message.group_id,
-            models.GroupMember.user_id == user_id
-        )
-    ).first()
-    
-    if not is_member:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You must be a group member to delete messages"
-        )
-    
-    # Check if user is the message sender
-    if message.from_user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only delete your own messages"
         )
     
     # Delete the message
@@ -310,11 +294,11 @@ def delete_group_message(
     return {"message": "Message deleted successfully"}
 
 # Clear all messages from group (creator only)
-@router.delete("/{group_id}/messages", status_code=status.HTTP_200_OK)
+@router.delete("/{group_id}/clear-messages", status_code=status.HTTP_200_OK)
 def clear_group_messages(
     group_id: int,
-    user_id: int = Query(..., description="Current user's ID"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Clear all messages from a group.
@@ -331,8 +315,8 @@ def clear_group_messages(
             detail="Group not found"
         )
     
-    # Check if user is the group creator
-    if group.creator_id != user_id:
+    # Check if current user is the group creator
+    if group.creator_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the group creator can clear all messages"

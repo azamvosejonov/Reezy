@@ -35,6 +35,7 @@ models/post_save.py
 models/post_view.py
 models/reel.py
 models/social_account.py
+models/sticker.py
 models/story.py
 models/user.py
 reezy.egg-info/PKG-INFO
@@ -58,6 +59,7 @@ routers/notifications.py
 routers/posts.py
 routers/relationships.py
 routers/social_auth.py
+routers/stickers.py
 routers/stories.py
 routers/stories_updated.py
 schemas/__init__.py
@@ -79,6 +81,7 @@ services/advertisement_service.py
 services/ai_ad_service.py
 services/block_service.py
 services/post_service.py
+services/sticker_service.py
 services/task_queue.py
 services/user_service.py
 tasks/__init__.py
@@ -87,3 +90,4 @@ tasks/post_tasks.py
 tests/__init__.py
 tests/conftest.py
 tests/logout.py
+tests/test_all.py

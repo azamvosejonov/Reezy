@@ -52,7 +52,7 @@ class GroupAdminInDB(GroupAdminBase):
 
 class GroupMessageBase(BaseModel):
     """Base schema for group message data."""
-    content: str
+    content: Optional[str] = None
     user_id: int
 
 

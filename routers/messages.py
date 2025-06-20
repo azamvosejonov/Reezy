@@ -11,24 +11,42 @@ import models, schemas
 from database import get_db
 from utils.file_utils import save_upload_file, delete_file, MAX_FILE_SIZE, SUPPORTED_FILE_TYPES
 from services.block_service import BlockService
+from models.user import User
+from .auth import get_current_user
 
 router = APIRouter()
 
 @router.post("/send", response_model=schemas.Message, summary="Xabar yuborish")
-def send_message(
+async def send_message(
     from_user_id: int, 
     to_user_id: int, 
     text: str, 
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    # Verify that the current user is the sender
+    if current_user.id != from_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Siz boshqa foydalanuvchi nomidan xabar yubora olmaysiz"
+        )
     # Create BlockService instance
     block_service = BlockService(db)
     
-    # Check if users have blocked each other
-    if block_service.check_block_status(from_user_id, to_user_id):
+    # Check if users have blocked each other in either direction
+    is_blocked = await block_service.check_block_status(from_user_id, to_user_id)
+    if is_blocked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot send message to blocked user"
+            detail="Siz bu foydalanuvchiga xabar yubora olmaysiz. Foydalanuvchi sizni bloklagan yoki siz uni bloklagansiz."
+        )
+        
+    # Check if recipient has blocked the sender
+    is_recipient_blocked = await block_service.check_block_status(to_user_id, from_user_id)
+    if is_recipient_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Siz bu foydalanuvchiga xabar yubora olmaysiz. Foydalanuvchi sizni bloklagan yoki siz uni bloklagansiz."
         )
     
     # Create the message
@@ -65,23 +83,24 @@ def send_message(
         "content": new_msg.content,
         "message_type": "text",
         "sender_id": new_msg.from_user_id,
+        "recipient_id": new_msg.to_user_id,
         "conversation_id": f"{min(from_user_id, to_user_id)}_{max(from_user_id, to_user_id)}",
         "is_read": new_msg.is_read,
         "is_edited": False,
         "created_at": new_msg.created_at.isoformat(),
-        "updated_at": new_msg.updated_at.isoformat(),
+        "updated_at": new_msg.created_at.isoformat(),  # Use created_at since we don't have updated_at
         "deleted_at": None,
         "sender": {
             "id": sender.id,
             "username": sender.username,
             "full_name": sender.full_name,
-            "avatar_url": sender.avatar_url
+            "avatar_url": getattr(sender, 'avatar_url', None) or getattr(sender, 'profile_picture', None)
         },
         "recipient": {
             "id": recipient.id,
             "username": recipient.username,
             "full_name": recipient.full_name,
-            "avatar_url": recipient.avatar_url
+            "avatar_url": getattr(recipient, 'avatar_url', None) or getattr(recipient, 'profile_picture', None)
         },
         "parent_message": None,
         "reply_to": None,
@@ -99,8 +118,18 @@ def send_message(
     
     return response
 
-@router.get("/inbox/{user_id}", response_model=list[schemas.Message], summary="Foydalanuvchiga kelgan xabarlar")
-def inbox(user_id: int, db: Session = Depends(get_db)):
+@router.get("/inbox/{user_id}", response_model=List[schemas.Message])
+async def get_inbox(
+    user_id: int, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verify that the current user is requesting their own inbox
+    if current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Siz boshqa foydalanuvchining xabarlarini ko'rolmaysiz"
+        )
     # Get all messages for the user
     messages = db.query(models.Message).filter(
         models.Message.to_user_id == user_id
@@ -158,12 +187,19 @@ def inbox(user_id: int, db: Session = Depends(get_db)):
     return formatted_messages
 
 @router.get("/dialog/{user1_id}/{user2_id}", response_model=List[schemas.Message], summary="Ikkita foydalanuvchi o'rtasidagi chat")
-def dialog(
+async def get_dialog(
     user1_id: int, 
     user2_id: int, 
     show_deleted: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    # Verify that the current user is one of the participants
+    if current_user.id not in (user1_id, user2_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Siz bu suhbatni ko'rish huquqiga egasiz"  # You are not authorized to view this conversation
+        )
     # Build the base query
     query = db.query(models.Message).filter(
         or_(
@@ -236,8 +272,15 @@ def dialog(
 def delete_message(
     message_id: int,
     user_id: int,  # Current user ID to determine if they're sender or recipient
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    # Verify the current user matches the user_id parameter
+    if current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Noto'g'ri foydalanuvchi"
+        )
     message = db.query(models.Message).filter(models.Message.id == message_id).first()
     if not message:
         raise HTTPException(
@@ -268,8 +311,15 @@ def clear_chat(
     user1_id: int,
     user2_id: int,
     current_user_id: int,  # The user who is requesting the deletion
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    # Verify the current user matches the current_user_id parameter
+    if current_user.id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Noto'g'ri foydalanuvchi"
+        )
     # Verify current user is part of the conversation
     if current_user_id not in (user1_id, user2_id):
         raise HTTPException(
@@ -309,8 +359,15 @@ def delete_conversation(
     user1_id: int,
     user2_id: int,
     current_user_id: int,  # The user who is requesting the deletion
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    # Verify the current user matches the current_user_id parameter
+    if current_user.id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Noto'g'ri foydalanuvchi"
+        )
     # Verify current user is part of the conversation
     if current_user_id not in (user1_id, user2_id):
         raise HTTPException(

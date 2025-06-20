@@ -198,6 +198,25 @@ class CallService:
             joinedload(Call.participants)
             .joinedload(CallParticipant.user)
         ).first()
+
+    def get_user_calls(self, user_id: int, limit: int = 20, offset: int = 0) -> List[Call]:
+        """
+        Get calls where the user was either caller or participant.
+        
+        Args:
+            user_id: ID of the user
+            limit: Maximum number of calls to return
+            offset: Number of calls to skip
+            
+        Returns:
+            List of calls where the user was a participant
+        """
+        return self.db.query(Call).filter(
+            or_(
+                Call.caller_id == user_id,
+                Call.receiver_id == user_id
+            )
+        ).order_by(Call.created_at.desc()).limit(limit).offset(offset).all()
         
         if not call:
             raise ValueError("Call not found")

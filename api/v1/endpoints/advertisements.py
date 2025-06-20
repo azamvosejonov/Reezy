@@ -31,7 +31,8 @@ def get_db():
 @router.post("/", response_model=Advertisement, status_code=status.HTTP_201_CREATED, operation_id="create_advertisement")
 async def create_advertisement(
     advertisement: AdvertisementCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Create a new advertisement.
@@ -69,19 +70,9 @@ async def create_advertisement(
     - **end_date**: When the ad should stop showing (optional)
     """
     try:
-        # Create a default advertisement with current timestamp
-        default_ad = AdvertisementCreate(
-            title=advertisement.title,
-            description=advertisement.description,
-            image_url=advertisement.image_url,  # Use the provided image_url
-            target_url=advertisement.target_url,
-            is_active=advertisement.is_active,
-            start_date=advertisement.start_date,
-            end_date=advertisement.end_date
-        )
-        
+        # Create advertisement with authenticated user's ID
         service = AdvertisementService(db)
-        return await service.create_advertisement(default_ad, 0)  # Use 0 for created_by since no auth
+        return await service.create_advertisement(advertisement, current_user.id)
     except Exception as e:
         logger.error(f"Error creating advertisement: {str(e)}")
         raise HTTPException(
@@ -92,7 +83,8 @@ async def create_advertisement(
 @router.get("/{ad_id}", response_model=Advertisement)
 async def get_advertisement(
     ad_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get an advertisement by ID.
@@ -113,7 +105,8 @@ async def list_advertisements(
     skip: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(100, ge=1, le=100, description="Items per page"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     List advertisements with pagination and filtering.
@@ -240,14 +233,15 @@ async def delete_advertisement(
             detail="An error occurred while deleting the advertisement"
         )
 
-@router.get("/active/", response_model=List[Advertisement])
+@router.get("/active/", response_model=List[Advertisement], operation_id="get_active_advertisements")
 async def get_active_advertisements(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get all active advertisements that are within their date range.
     
-    This endpoint is public and doesn't require authentication.
+    This endpoint requires authentication.
     """
     try:
         service = AdvertisementService(db)

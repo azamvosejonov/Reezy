@@ -22,6 +22,7 @@ from schemas.post import PostBase, PostCreate, PostInDBBase, PostUpdate, PostRes
 from schemas.blocked_post import BlockedPostCreate, BlockedPost
 from utils.media_handler import MediaHandler
 from config import settings
+from routers.auth import get_current_user
 
 # For JWT token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -34,6 +35,149 @@ class PostService:
     def __init__(self, db: Session):
         self.db = db
         self.media_handler = MediaHandler(settings.MEDIA_ROOT)
+    
+    def _check_post_auth(self, post_id: int, current_user: User) -> Post:
+        """
+        Check if the user has permission to access the post.
+        
+        Args:
+            post_id: ID of the post to check
+            current_user: Authenticated user
+            
+        Returns:
+            Post object if user has access
+            
+        Raises:
+            HTTPException: If post not found or user not authorized
+        """
+        post = self.db.query(Post).filter(Post.id == post_id).first()
+        if not post:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Post not found"
+            )
+            
+        if not current_user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required"
+            )
+            
+        # Check if user is blocked by post owner
+        if post.user_id != current_user.id:
+            blocked = self.db.query(Block).filter(
+                Block.blocked_by_id == current_user.id,
+                Block.blocked_user_id == post.user_id
+            ).first()
+            if blocked:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You are blocked from viewing this post"
+                )
+        
+        return post
+    
+    def create_post(self, post_data: PostCreate, current_user: User) -> Post:
+        """
+        Create a new post.
+        
+        Args:
+            post_data: Post creation data
+            current_user: Authenticated user
+            
+        Returns:
+            Created Post object
+        """
+        post = Post(
+            title=post_data.title,
+            content=post_data.content,
+            user_id=current_user.id,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        self.db.add(post)
+        self.db.commit()
+        self.db.refresh(post)
+        return post
+
+    def get_post(self, post_id: int, current_user: User = Depends(get_current_user)) -> Post:
+        """
+        Get a specific post with authentication and block checks.
+        
+        Args:
+            post_id: ID of the post to retrieve
+            current_user: Authenticated user
+            
+        Returns:
+            Post object if user has access
+        """
+        post = self._check_post_auth(post_id, current_user)
+        return post
+
+    def get_user_posts(self, user_id: int, current_user: User) -> List[Post]:
+        """
+        Get all posts for a user with block checks.
+        
+        Args:
+            user_id: ID of the user whose posts to retrieve
+            current_user: Authenticated user
+            
+        Returns:
+            List of Post objects
+        """
+        # Check if current user is blocked by target user
+        if user_id != current_user.id:
+            blocked = self.db.query(Block).filter(
+                Block.blocked_by_id == current_user.id,
+                Block.blocked_user_id == user_id
+            ).first()
+            if blocked:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You are blocked from viewing this user's posts"
+                )
+        
+        posts = self.db.query(Post).filter(Post.user_id == user_id).all()
+        return posts
+
+    def delete_post(self, post_id: int, current_user: User) -> None:
+        """
+        Delete a post.
+        
+        Args:
+            post_id: ID of the post to delete
+            current_user: Authenticated user
+        """
+        post = self._check_post_auth(post_id, current_user)
+        
+        if post.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only delete your own posts"
+            )
+            
+        self.db.delete(post)
+        self.db.commit()
+
+    def delete_post(self, post_id: int, current_user: User = Depends(get_current_user)) -> None:
+        """
+        Delete a post.
+        
+        Args:
+            post_id: ID of the post to delete
+            current_user: Authenticated user
+        """
+        post = self._check_post_auth(post_id, current_user)
+        
+        if post.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only delete your own posts"
+            )
+            
+        self.db.delete(post)
+        self.db.commit()
     
     async def _apply_media_enhancements(
         self,
@@ -201,6 +345,7 @@ class PostService:
         self,
         post_data: PostCreate,
         user_id: int,
+        client_ip: str,
         background_tasks = None
     ) -> Dict[str, Any]:
         """
@@ -209,12 +354,16 @@ class PostService:
         Args:
             post_data: Post data including media and enhancement options
             user_id: ID of the post author
+            client_ip: IP address of the client creating the post
             background_tasks: FastAPI background tasks for async processing
             
         Returns:
             Dictionary with the created post ID
         """
         try:
+            # Get country from IP
+            country_info = self.geo_service.get_country_from_ip(client_ip)
+            
             # Create post in database
             db_post = Post(
                 content=post_data.body,
@@ -228,7 +377,9 @@ class PostService:
                 text_overlay=post_data.text_overlay,
                 text_position=post_data.text_position or "bottom",
                 sticker_id=post_data.sticker_id,
-                is_encrypted=False  # Will be set to True after encryption if needed
+                is_encrypted=False,
+                created_ip=client_ip,
+                country_code=country_info['country_code'] if country_info else None
             )
             
             self.db.add(db_post)
@@ -705,79 +856,7 @@ class PostService:
                 detail="An error occurred while unblocking the post"
             )
     
-    async def get_recommended_posts(
-        self,
-        current_user_id: Optional[int],
-        skip: int = 0,
-        limit: int = 10
-    ) -> List[PostResponse]:
-        """
-        Get recommended posts for a user.
-        
-        For unauthenticated users, returns random posts.
-        For authenticated users, considers likes and preferences.
-        
-        Args:
-            current_user_id: ID of the current user (None for unauthenticated)
-            skip: Number of posts to skip
-            limit: Number of posts to return
-            
-        Returns:
-            List of recommended posts
-        """
-        try:
-            # Get all posts
-            posts_query = self._get_posts_query(
-                user_id=None,  # Don't filter by user
-                include_blocked=False,
-                current_user_id=current_user_id
-            )
-            
-            # Get total count for pagination
-            total = posts_query.count()
-            
-            # For authenticated users, get posts based on preferences
-            if current_user_id:
-                # Get posts liked by the user
-                liked_posts = self.db.query(Post.id).join(Like).filter(
-                    Like.user_id == current_user_id
-                ).all()
-                
-                liked_post_ids = [post_id for (post_id,) in liked_posts]
-                
-                # Get posts that are similar to liked posts
-                if liked_post_ids:
-                    recommended_query = posts_query.filter(
-                        Post.id.in_(liked_post_ids)
-                    ).order_by(func.random())
-                else:
-                    # If no likes, just get random posts
-                    recommended_query = posts_query.order_by(func.random())
-            else:
-                # For unauthenticated users, just get random posts
-                recommended_query = posts_query.order_by(func.random())
-            
-            # Apply pagination
-            posts = recommended_query.offset(skip).limit(limit).all()
-            
-            # Convert to response format
-            post_responses = []
-            for post in posts:
-                post_data = post.to_dict(include_user=True)
-                post_data['is_liked'] = False  # Default for unauthenticated users
-                post_data['is_saved'] = False
-                post_data['can_edit'] = False
-                post_data['can_delete'] = False
-                post_responses.append(PostResponse(**post_data))
-            
-            return post_responses
-            
-        except Exception as e:
-            logger.error(f"Error getting recommended posts: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while retrieving recommended posts"
-            )
+
 
     async def is_post_blocked(
         self,

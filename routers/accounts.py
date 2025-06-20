@@ -1,9 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Query, status, BackgroundTasks
+
+import models
+import schemas
+from models import PostView
+from schemas.follow import FollowRequestResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, UniqueConstraint
-import models
 from database import SessionLocal
+from schemas.post_view import PostViewResponse
 from schemas.user import UserInDB, UserResponse, PasswordUpdateRequest
 from schemas.channel import ChannelInDB
 from models.user import User
@@ -104,8 +109,7 @@ async def search_all(
     skip: int = 0,
     limit: int = 10,
     db: Session = Depends(get_db),
-    # TODO: Add proper authentication
-    # current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Foydalanuvchilar va kanallarni qidirish.
@@ -312,9 +316,9 @@ class UserUpdateResponse(BaseModel):
     - To remove profile picture, send 'remove_picture=true' as form data
     - To update profile picture, send the new image file
     - Empty strings will be converted to null/None
-    """
-)
+    """)
 async def update_account(
+    user_id: int = Form(..., description="User ID to update"),
     db: Session = Depends(get_db),
     full_name: Optional[str] = Form(None, description="Optional full name"),
     bio: Optional[str] = Form(None, description="Optional bio"),
@@ -324,11 +328,12 @@ async def update_account(
         False, 
         description="Set to true to remove existing profile picture"
     ),
+    current_user: User = Depends(get_current_user)
 ):
-    # TODO: Add proper authentication
-    current_user = db.query(models.User).filter(models.User.id == 1).first()
+    # Get the user to update
+    user = db.query(models.User).filter(models.User.id == user_id).first()
     
-    if not current_user:
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
@@ -336,21 +341,21 @@ async def update_account(
     
     # Update only provided fields
     if full_name is not None:
-        current_user.full_name = full_name.strip() if full_name and full_name.strip() else None
+        user.full_name = full_name.strip() if full_name and full_name.strip() else user.full_name
     
     if bio is not None:
-        current_user.bio = bio.strip() if bio and bio.strip() else None
+        user.bio = bio.strip() if bio and bio.strip() else user.bio
     
     if website is not None:
-        current_user.website = website.strip() if website and website.strip() else None
+        user.website = website.strip() if website and website.strip() else user.website
 
     # Handle profile picture operations only if explicitly requested
-    if remove_picture and current_user.profile_picture:
+    if remove_picture and user.profile_picture:
         # Remove existing profile picture if requested
         try:
-            if os.path.exists(current_user.profile_picture):
-                os.remove(current_user.profile_picture)
-            current_user.profile_picture = None
+            if os.path.exists(user.profile_picture):
+                os.remove(user.profile_picture)
+            user.profile_picture = None
         except Exception as e:
             print(f"Error removing profile picture: {e}")
     
@@ -360,10 +365,10 @@ async def update_account(
         os.makedirs(upload_dir, exist_ok=True)
 
         # Remove old profile picture if exists
-        if current_user.profile_picture:
+        if user.profile_picture:
             try:
-                if os.path.exists(current_user.profile_picture):
-                    os.remove(current_user.profile_picture)
+                if os.path.exists(user.profile_picture):
+                    os.remove(user.profile_picture)
             except Exception as e:
                 print(f"Error removing old profile picture: {e}")
 
@@ -375,24 +380,24 @@ async def update_account(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        current_user.profile_picture = file_path
+        user.profile_picture = file_path
 
     try:
         db.commit()
-        db.refresh(current_user)
+        db.refresh(user)
         
         # Create response manually to avoid validation errors
         return {
-            "id": current_user.id,
-            "username": current_user.username,
-            "email": current_user.email if hasattr(current_user, 'email') else None,
-            "full_name": current_user.full_name,
-            "bio": current_user.bio,
-            "website": current_user.website,
-            "profile_picture": current_user.profile_picture,
-            "is_private": current_user.is_private if hasattr(current_user, 'is_private') else False,
-            "is_verified": current_user.is_verified if hasattr(current_user, 'is_verified') else False,
-            "created_at": current_user.created_at
+            "id": user.id,
+            "username": user.username,
+            "email": user.email if hasattr(user, 'email') else None,
+            "full_name": user.full_name,
+            "bio": user.bio,
+            "website": user.website,
+            "profile_picture": user.profile_picture,
+            "is_private": user.is_private if hasattr(user, 'is_private') else False,
+            "is_verified": user.is_verified if hasattr(user, 'is_verified') else False,
+            "created_at": user.created_at
         }
     except Exception as e:
         db.rollback()
@@ -405,23 +410,86 @@ async def update_account(
 def get_user(
     user_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     user_to_view = db.query(models.User).filter(models.User.id == user_id).first()
 
     if not user_to_view:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Check if profile is private and if current user is not following
+    if user_to_view.is_private and user_to_view.id != current_user.id:
+        # Check if current user is following the private profile
+        is_following = db.query(models.Follower).filter(
+            models.Follower.follower_id == current_user.id,
+            models.Follower.followed_id == user_id
+        ).first()
+        
+        if not is_following:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot view private profile. You must follow this user first."
+            )
+
     return user_to_view
 
 @router.get("/followers/{user_id}", response_model=List[UserResponse], summary="Foydalanuvchining followerlarini olish")
-def get_followers(user_id: int, db: Session = Depends(get_db)):
+def get_followers(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Get the user whose followers we're viewing
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if profile is private
+    if user.is_private and user_id != current_user.id:
+        # Check if current user is following the private profile
+        is_following = db.query(models.Follower).filter(
+            models.Follower.follower_id == current_user.id,
+            models.Follower.followed_id == user_id
+        ).first()
+        
+        if not is_following:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot view private profile's followers. You must follow this user first."
+            )
+    
     followers = db.query(models.Follower).filter(models.Follower.followed_id == user_id).all()
     follower_ids = [f.follower_id for f in followers]
     users = db.query(models.User).filter(models.User.id.in_(follower_ids)).all()
     return users
 
 @router.get("/following/{user_id}", response_model=List[UserResponse], summary="Foydalanuvchining followinglarini olish")
-def get_following(user_id: int, db: Session = Depends(get_db)):
+def get_following(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Get the user whose following list we're viewing
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if profile is private
+    if user.is_private and user_id != current_user.id:
+        # Check if current user is following the private profile
+        is_following = db.query(models.Follower).filter(
+            models.Follower.follower_id == current_user.id,
+            models.Follower.followed_id == user_id
+        ).first()
+        
+        if not is_following:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot view private profile's following list. You must follow this user first."
+            )
+    
     following = db.query(models.Follower).filter(models.Follower.follower_id == user_id).all()
     following_ids = [f.followed_id for f in following]
     users = db.query(models.User).filter(models.User.id.in_(following_ids)).all()
@@ -445,71 +513,55 @@ def add_post_view(post_id: int, user_id: int, db: Session):
 # Eslatma: PostView jadvalida (post_id, owner_id) uchun UNIQUE cheklov bo'lishi kerak
 # Bu takroriy yozuvlarning oldini oladi va views soni aniq bo'ladi
 
-@router.get("/posts/{post_id}/views", summary="Post ko'rishlar sonini olish")
-def get_post_views(post_id: int, db: Session = Depends(get_db)):
-    # Bu funksiya aslida Post modeliga tegishli bo'lishi kerak
-    # Hozircha shu yerda qoldirildi
-    return {"post_id": post_id, "views": random.randint(100, 1000)}
-
-@router.post("/logout", summary="Logout")
-def logout():
-    return {"message": "Logout successful"}
-
-@router.put("/change-password/{user_id}", status_code=status.HTTP_200_OK)
-async def change_password(
-    user_id: int,
-    password_data: PasswordUpdateRequest,
-    db: Session = Depends(get_db)
+@router.get(
+    "/users/accounts/posts/{post_id}/views",
+    response_model=int,
+    summary="Get post views",
+    description="Get all views for a specific post. Requires authentication.",
+    responses={
+        200: {"description": "Successfully retrieved post views"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"},
+        404: {"description": "Post not found"}
+    }
+)
+async def get_post_views(
+    post_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Update user password by verifying the old password first.
-    No authentication required.
+    Get all views for a specific post.
+    
+    - **post_id**: ID of the post to get views for
+    
+    Requires authentication. Only allows viewing views for posts that belong to the current user.
     """
-    # Get the user
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
+    # Check if the post exists and belongs to the current user
+    post = db.query(models.Post).filter(
+        models.Post.id == post_id,
+        models.Post.owner_id == current_user.id
+    ).first()
+    
+    if not post:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"success": False, "message": "Foydalanuvchi topilmadi"}
+            detail="Post not found or you don't have permission to view its views"
         )
     
-    # Debug logging for password verification
-    print(f"Debug - Verifying password for user: {user_id}")
-    print(f"Debug - Provided old password: {password_data.old_password}")
-    print(f"Debug - Stored hash: {user.hashed_password}")
-    print(f"Debug - Hash type: {type(user.hashed_password)}")
+    # Get all views for this post
+    views = db.query(models.PostView).filter(models.PostView.post_id == post_id).all()
     
-    # Verify old password using pwd_context.verify
-    is_verified = pwd_context.verify(password_data.old_password, user.hashed_password)
-    print(f"Debug - Password verified: {is_verified}")
+    return len(views)
     
-    if not is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"success": False, "message": "Eski parol noto'g'ri"}
-        )
-    
-    # Update password using pwd_context.hash() for consistency
-    try:
-        user.hashed_password = pwd_context.hash(password_data.new_password)
-        
-        # Invalidate all existing reset tokens for this user
-        db.query(models.PasswordResetToken).filter(
-            models.PasswordResetToken.email == user.email
-        ).update({"used": True})
-        
-        db.commit()
-        
-        return {
-            "success": True,
-            "message": "Parol muvaffaqiyatli yangilandi"
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"success": False, "message": f"Parolni yangilashda xatolik yuz berdi: {str(e)}"}
-        )
+    return {
+        "post_id": post_id, 
+        "views": len(views),
+        "success": True,
+        "message": "Post view count retrieved successfully"
+    }
+
+
 
 # --- Profile Privacy and App Lock ---
 
@@ -517,80 +569,103 @@ class PrivacyToggleRequest(BaseModel):
     is_private: bool
 
 @router.put(
-    "/toggle_privacy",
-    response_model=dict,
-    summary="Akkaunt maxfiyligini o'zgartirish / Toggle account privacy",
-    description="""
-    Ushbu endpoint foydalanuvchi hisobining maxfiylik holatini o'zgartiradi.
-    - is_private: true - akkauntni yopish (maxfiy qilish)
-    - is_private: false - akkauntni ochish (ommaviy qilish)
-    """
-)
+    "/toggle_privacy",)
 async def toggle_account_privacy(
+    user_id: int,
     request: PrivacyToggleRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    # TODO: Add proper authentication
-    current_user = db.query(models.User).filter(models.User.id == 1).first()  # Using a dummy user ID
+    """
+    Toggle user account privacy.
     
-    if not current_user:
+    - **user_id**: ID of the user to toggle privacy for
+    - **is_private**: Set to True to make account private, False to make public
+    
+    Only the owner of the account can toggle privacy.
+    """
+    # Get the user's account
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail="User account not found"
         )
     
-    current_user.is_private = request.is_private
-    db.commit()
+    # Check if current user owns the account
+    if user.id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only toggle privacy for your own account"
+        )
     
-    return {
-        "success": True,
-        "message": "Account privacy updated successfully",
-        "is_private": current_user.is_private
-    }
-    return current_user
+    # Update privacy setting
+    user.is_private = request.is_private
+    db.commit()
+    db.refresh(user)
+    
+    return {"message": "Account privacy updated successfully", "is_private": user.is_private}
 
 class SetAppLockRequest(BaseModel):
     """Request model for setting app lock password"""
     user_id: int
     password: str = Field(..., min_length=4, description="New app lock password (min 4 characters)")
 
-@router.post(
-    "/set-app-lock",
-    status_code=status.HTTP_200_OK,
-    summary="Set or change the app lock password",
-    response_model=dict,
-    responses={
-        200: {"description": "App lock password updated successfully"},
-        400: {"description": "Invalid request data"},
-        404: {"description": "User not found"}
-    }
-)
-async def set_app_lock_password(
-    payload: SetAppLockRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    Set or change the application lock password.
-    
-    - **user_id**: ID of the user
-    - **password**: New password for app lock (min 4 characters)
-    """
-    user = db.query(models.User).filter(models.User.id == payload.user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    # Update app lock password
-    user.app_lock_password = pwd_context.hash(payload.password)
-    db.commit()
-    
-    return {
-        "status": "success", 
-        "message": "App lock password updated successfully",
-        "user_id": user.id
-    }
+# @router.post(
+#     "/set-app-lock",
+#     status_code=status.HTTP_200_OK,
+#     summary="Set or change the app lock password",
+#     response_model=dict,
+#     responses={
+#         200: {"description": "App lock password updated successfully"},
+#         400: {"description": "Invalid request data"},
+#         401: {"description": "Not authenticated"},
+#         403: {"description": "Access denied"},
+#         404: {"description": "User not found"}
+#     }
+# )
+# async def set_app_lock_password(
+#     payload: SetAppLockRequest,
+#     db: Session = Depends(get_db),
+#     current_user: User = Depends(get_current_user)
+# ):
+#     """
+#     Set or change the application lock password.
+#     
+#     - **user_id**: ID of the user
+#     - **password**: New password for app lock (min 4 characters)
+#     """
+#     # Validate password length
+#     if len(payload.password) < 4:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Password must be at least 4 characters long"
+#         )
+#     
+#     # Check if current user is updating their own app lock
+#     if payload.user_id != current_user.id:
+#         raise HTTPException(
+#             status_code=status.HTTP_403_FORBIDDEN,
+#             detail="You can only set app lock for your own account"
+#         )
+#     
+#     user = db.query(models.User).filter(models.User.id == payload.user_id).first()
+#     if not user:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="User not found"
+#         )
+#     
+#     # Update app lock password
+#     user.app_lock_password = pwd_context.hash(payload.password)
+#     db.commit()
+#     db.refresh(user)
+#     
+#     return {
+#         "status": "success", 
+#         "message": "App lock password updated successfully",
+#         "user_id": user.id
+#     }
 
 class VerifyAppLockRequest(BaseModel):
     """Request model for verifying app lock password"""
@@ -606,12 +681,14 @@ class VerifyAppLockRequest(BaseModel):
         200: {"description": "App lock password verified successfully"},
         400: {"description": "Invalid request data"},
         401: {"description": "Incorrect app lock password"},
+        403: {"description": "Access denied"},
         404: {"description": "User not found or app lock not set up"}
     }
 )
 async def verify_app_lock_password(
     payload: VerifyAppLockRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Verify the application lock password.
@@ -646,81 +723,372 @@ async def verify_app_lock_password(
 
 # --- Follow and Follow Request Logic ---
 
-@router.post("/follow/{user_to_follow_id}", summary="Follow a user or send a follow request")
-def follow_user(user_to_follow_id: int, db: Session = Depends(get_db)):
-    requester_id = 1
-    if requester_id == user_to_follow_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot follow yourself.")
-
-    user_to_follow = db.query(models.User).filter(models.User.id == user_to_follow_id).first()
-    if not user_to_follow:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-
-    # Check if already following or request is pending
-    existing_follow = db.query(models.Follower).filter_by(follower_id=requester_id, followed_id=user_to_follow_id).first()
-    if existing_follow:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You are already following this user.")
+@router.post(
+    "/follow/{user_to_follow_id}",
+    summary="Follow a user or send a follow request",
+    responses={
+        200: {"description": "Follow request sent successfully"},
+        400: {"description": "Bad request (self-follow or already following)"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"},
+        404: {"description": "User not found"}
+    }
+)
+async def follow_user(
+    user_to_follow_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Follow a user or send a follow request.
     
-    pending_request = db.query(models.FollowRequest).filter_by(requester_id=requester_id, requested_id=user_to_follow_id, status='pending').first()
-    if pending_request:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Follow request already sent.")
+    - **user_to_follow_id**: ID of the user to follow
+    """
+    # Check if user is trying to follow themselves
+    if current_user.id == user_to_follow_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot follow yourself."
+        )
 
+    # Get the user to follow
+    user_to_follow = db.query(models.User).filter(
+        models.User.id == user_to_follow_id
+    ).first()
+    
+    if not user_to_follow:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found."
+        )
+
+    # Check if already following
+    existing_follow = db.query(models.Follower).filter_by(
+        follower_id=current_user.id,
+        followed_id=user_to_follow_id
+    ).first()
+    
+    if existing_follow:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You are already following this user."
+        )
+    
+    # Check for pending follow request
+    pending_request = db.query(models.FollowRequest).filter_by(
+        requester_id=current_user.id,
+        requested_id=user_to_follow_id,
+        status='pending'
+    ).first()
+    
+    if pending_request:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Follow request already sent."
+        )
+
+    # Check if target user's account is private
     if user_to_follow.is_private:
         # Create a follow request
-        follow_request = models.FollowRequest(requester_id=requester_id, requested_id=user_to_follow_id)
+        follow_request = models.FollowRequest(
+            requester_id=current_user.id,
+            requested_id=user_to_follow_id,
+            status='pending'
+        )
         db.add(follow_request)
         db.commit()
-        return {"status": "request_sent"}
-    else:
-        # Follow directly
-        new_follow = models.Follower(follower_id=requester_id, followed_id=user_to_follow_id)
-        db.add(new_follow)
-        db.commit()
-        return {"status": "following"}
+        db.refresh(follow_request)
+        return {
+            "status": "success",
+            "message": "Follow request sent successfully",
+            "request_id": follow_request.id
+        }
 
-@router.get("/follow-requests", response_model=List[PasswordUpdateRequest], summary="Get pending follow requests")
-def get_follow_requests(db: Session = Depends(get_db)):
-    requests = db.query(models.FollowRequest).filter_by(requested_id=1, status='pending').all()
-    return requests
-
-@router.post("/follow-requests/{request_id}/accept", summary="Accept a follow request")
-def accept_follow_request(request_id: int, db: Session = Depends(get_db)):
-    request = db.query(models.FollowRequest).filter_by(id=request_id, requested_id=1, status='pending').first()
-    if not request:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found or already handled.")
-
-    request.status = 'accepted'
-    new_follow = models.Follower(follower_id=request.requester_id, followed_id=request.requested_id)
-    db.add(new_follow)
+    # Create a direct follow
+    follow = models.Follower(
+        follower_id=current_user.id,
+        followed_id=user_to_follow_id
+    )
+    db.add(follow)
     db.commit()
-    return {"status": "accepted"}
+    db.refresh(follow)
+    return {
+        "status": "success",
+        "message": "Now following user",
+        "follow_id": follow.id
+    }
 
-@router.post("/follow-requests/{request_id}/decline", summary="Decline a follow request")
-def decline_follow_request(request_id: int, db: Session = Depends(get_db)):
-    request = db.query(models.FollowRequest).filter_by(id=request_id, requested_id=1, status='pending').first()
+@router.get(
+    "/follow-requests",
+    response_model=List[FollowRequestResponse],
+    summary="Get pending follow requests",
+    responses={
+        200: {"description": "Successfully retrieved follow requests"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"}
+    }
+)
+async def get_follow_requests(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all pending follow requests for the current user.
+    
+    Returns a list of follow requests where the current user is the requested user.
+    """
+    # Get all pending follow requests where the current user is the requested user
+    requests = db.query(models.FollowRequest).filter(
+        models.FollowRequest.requested_id == current_user.id,
+        models.FollowRequest.status == 'pending'
+    ).all()
+    
+    # Convert to response model
+    return [
+        FollowRequestResponse(
+            id=request.id,
+            requester_id=request.requester_id,
+            requested_id=request.requested_id,
+            status=request.status,
+            created_at=request.created_at
+        )
+        for request in requests
+    ]
+
+@router.post(
+    "/follow-requests/{request_id}/accept",
+    summary="Accept a follow request",
+    responses={
+        200: {"description": "Follow request accepted successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"},
+        404: {"description": "Follow request not found"}
+    }
+)
+async def accept_follow_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Accept a follow request.
+    
+    - **request_id**: ID of the follow request to accept
+    
+    Only the requested user can accept follow requests.
+    """
+    # Get the follow request
+    request = db.query(models.FollowRequest).filter(
+        models.FollowRequest.id == request_id,
+        models.FollowRequest.status == 'pending'
+    ).first()
+    
     if not request:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found or already handled.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Follow request not found or already processed"
+        )
+    
+    # Check if current user is the requested user
+    if request.requested_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only accept follow requests sent to you"
+        )
+    
+    # Check if they're already following
+    existing_follow = db.query(models.Follower).filter_by(
+        follower_id=request.requester_id,
+        followed_id=request.requested_id
+    ).first()
+    
+    if existing_follow:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already following you"
+        )
+    
+    # Create follower relationship
+    follower = models.Follower(
+        follower_id=request.requester_id,
+        followed_id=request.requested_id
+    )
+    db.add(follower)
+    
+    # Update request status
+    request.status = 'accepted'
+    db.commit()
+    db.refresh(follower)
+    
+    return {
+        "status": "success",
+        "message": "Follow request accepted successfully",
+        "follow_id": follower.id
+    }
 
+@router.post(
+    "/follow-requests/{request_id}/decline",
+    summary="Decline a follow request",
+    responses={
+        200: {"description": "Follow request declined successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied"},
+        404: {"description": "Follow request not found"}
+    }
+)
+async def decline_follow_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Decline a follow request.
+    
+    - **request_id**: ID of the follow request to decline
+    
+    Only the requested user can decline follow requests.
+    """
+    # Get the follow request
+    request = db.query(models.FollowRequest).filter(
+        models.FollowRequest.id == request_id,
+        models.FollowRequest.status == 'pending'
+    ).first()
+
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Follow request not found or already processed"
+        )
+
+    # Check if current user is the requested user
+    if request.requested_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only decline follow requests sent to you"
+        )
+
+    # Update request status
     request.status = 'declined'
     db.commit()
-    return {"status": "declined"}
+
+    return {
+        "status": "success",
+        "message": "Follow request declined successfully"
+    }
 
 # --- Get Profile Logic (Handles Private Profiles) ---
 
-@router.get("/{user_id}", response_model=UserResponse, summary="Get user profile")
-def get_user_profile(user_id: int, db: Session = Depends(get_db)):
-    viewer_id = 1
-    user_to_view = db.query(models.User).filter(models.User.id == user_id).first()
+@router.get(
+    "/users/{user_id}",
+    response_model=schemas.user.UserResponse,
+    summary="Get user profile",
+    responses={
+        200: {"description": "User profile retrieved successfully"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "Access denied (private profile)"},
+        404: {"description": "User not found"}
+    }
+)
+async def get_user_profile(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get user profile information.
+    
+    - **user_id**: ID of the user to get profile for
+    
+    If the profile is private, only the owner or their followers can view it.
+    """
+    # Get the user
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check if profile is private and if user has access
+    if user.is_private:
+        # Check if current user is the owner or a follower
+        is_owner = user_id == current_user.id
+        is_follower = db.query(models.Follower).filter(
+            models.Follower.follower_id == current_user.id,
+            models.Follower.followed_id == user_id
+        ).first()
+        
+        if not (is_owner or is_follower):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot view private profile"
+            )
+    
+    # Get follower count
+    follower_count = db.query(models.Follower).filter(models.Follower.followed_id == user_id).count()
+    
+    # Get following count
+    following_count = db.query(models.Follower).filter(models.Follower.follower_id == user_id).count()
+    
+    # Get post count
+    post_count = db.query(models.Post).filter(models.Post.owner_id == user_id).count()
+    
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        bio=user.bio,
+        website=user.website,
+        profile_picture=user.profile_picture,
+        is_private=user.is_private,
+        is_verified=user.is_verified,
+        follower_count=follower_count,
+        following_count=following_count,
+        post_count=post_count,
+        created_at=user.created_at
+    )
 
-    if not user_to_view:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    if not user_to_view.is_private or user_id == viewer_id:
-        return user_to_view
-
-    # Check if viewer is a follower
-    is_follower = db.query(models.Follower).filter_by(follower_id=viewer_id, followed_id=user_id).first()
-    if is_follower:
-        return user_to_view
-    else:
-        return {"error": "Private profile"}
+@router.get("/posts/{user_id}/views", response_model=List[PostViewResponse], summary="Get user's post views")
+async def get_post_views(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all views for all posts of a specific user.
+    
+    - **user_id**: ID of the user whose post views to get
+    
+    Only the user themselves can view their post views.
+    """
+    # Get the user
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Only allow the user to view their own post views
+    if user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own post views"
+        )
+    
+    # Get all posts for the user
+    posts = db.query(models.Post).filter(models.Post.owner_id == user_id).all()
+    
+    # For each post, get the views
+    all_views = []
+    for post in posts:
+        views = db.query(models.PostView).filter(models.PostView.post_id == post.id).all()
+        all_views.extend([PostViewResponse(
+            id=view.id,
+            post_id=view.post_id,
+            owner_id=view.owner_id,
+            created_at=view.created_at
+        ) for view in views])
+    
+    return all_views

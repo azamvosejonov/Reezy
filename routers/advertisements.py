@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from models import User, Advertisement as AdvertisementModel
 from database import SessionLocal
+from routers.auth import get_current_user
 
 from schemas import AdvertisementCreate, Advertisement as AdvertisementSchema, AdvertisementApprove, AdvertisementStats
 
@@ -38,7 +39,8 @@ MAX_BUDGET = 1000
 @router.post("/", response_model=AdvertisementSchema)
 async def create_advertisement(
     ad_data: AdvertisementCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Create a new advertisement"""
     # Create the advertisement
@@ -66,7 +68,8 @@ async def create_advertisement(
 
 @router.get("/my-ads", response_model=List[AdvertisementSchema])
 async def get_my_advertisements(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Get all advertisements for the current user"""
     # TODO: Add a way to identify the user without authentication

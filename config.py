@@ -3,7 +3,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "sqlite:///./test.db"
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost/reezy"
     SQLALCHEMY_DB_TABLE_PREFIX: str = ""
     
     # JWT Authentication

@@ -3,8 +3,8 @@ Models package for the application.
 
 This package contains all SQLAlchemy models for the application.
 """
-
 # Import all models here to make them available when importing from models
+from .ai_usage import AIUsage
 from .user import User
 from .post import Post
 from .comment import Comment
@@ -67,5 +67,6 @@ __all__ = [
     'Sticker',
     'UserSticker',
     'UserCoin',
-    'CoinTransaction'
+    'CoinTransaction',
+    'AIUsage'
 ]

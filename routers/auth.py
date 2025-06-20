@@ -5,20 +5,134 @@ import smtplib
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional
-from fastapi import Depends, HTTPException, status, APIRouter, Form, Request, Response
+from typing import Optional, Dict, Any, List, Union
+from urllib import request
+
+import bcrypt
+from fastapi import Depends, HTTPException, status, APIRouter, Form, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ConfigDict
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., description="Foydalanuvchi nomi", example="example_user")
+    password: str = Field(..., description="Parol", example="your_password", min_length=8)
+    captcha: str = Field(..., description="Captcha kodi", example="123456")
+
+from fastapi import Response
+
+# Swagger UI bilan integratsiya uchun klass
+# Define response models first
+class UserInfo(BaseModel):
+    """User information model for authentication response"""
+    id: int
+    username: str
+    email: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": 1,
+                "username": "example_user",
+                "email": "user@example.com"
+            }
+        }
+
+class TokenResponse(BaseModel):
+    """Token response model for authentication endpoints."""
+    access_token: str
+    token_type: str = "bearer"
+    scope: str = "api"
+    success: bool = True
+    message: str
+    user: UserInfo
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                "token_type": "bearer",
+                "scope": "api",
+                "success": True,
+                "message": "Tizimga kiritildi",
+                "user": {
+                    "id": 1,
+                    "username": "example_user",
+                    "email": "user@example.com"
+                }
+            },
+            "description": "Authentication token response",
+            "type": "object",
+            "properties": {
+                "access_token": {"type": "string", "description": "JWT access token"},
+                "token_type": {"type": "string", "enum": ["bearer"]},
+                "scope": {"type": "string", "description": "Scope of the access"},
+                "success": {"type": "boolean", "description": "Indicates if the request was successful"},
+                "message": {"type": "string", "description": "Human-readable message"},
+                "user": {
+                    "$ref": "#/components/schemas/UserInfo"
+                }
+            },
+            "required": ["access_token", "user", "message"]
+        }
+    )
+
+# Add UserInfo to the OpenAPI schema
+UserInfo.Config.schema_extra = {
+    "description": "User information",
+    "type": "object",
+    "properties": {
+        "id": {"type": "integer", "format": "int64"},
+        "username": {"type": "string"},
+        "email": {"type": "string", "format": "email"}
+    },
+    "required": ["id", "username", "email"]
+}
+
+class SwaggerAuthResponse(JSONResponse):
+    def __init__(self, content: Dict[str, Any], token: str, status_code: int = 200):
+        super().__init__(content, status_code=status_code)
+        # Set token in headers for Swagger UI
+        self.headers["Authorization"] = f"Bearer {token}"
+        self.headers["X-Swagger-UI-Auth-Reset"] = "true"
+        # Set token in cookie
+        self.set_cookie(
+            key="Authorization",
+            value=f"Bearer {token}",
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        )
+        # Add token to response body
+        content["access_token"] = token
+        content["token_type"] = "bearer"
+        # Swagger UI integration
+        self.headers["X-Swagger-UI-Auth-Token"] = token
+        self.headers["X-Swagger-UI-Auth-Status"] = "active"
+        self.headers["X-Swagger-UI-Auth-Type"] = "bearer"
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from h11._abnf import status_code
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-from utils.geoip import GeoIPService, logger
+
+from models.base_models import UserSettings
+from services.ip_service import IPService
 import asyncio
+
+from utils.geoip import GeoIPService
+import logging
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Initialize IP service
+ip_service = IPService()
 
 import schemas, models
 from models import User, PasswordResetToken
 from schemas.user import PasswordUpdateRequest, NewPasswordRequest, VerifyCodeRequest, PasswordResetRequest, \
-    TokenResponse
+    TokenResponse, UserResponse
 from database import SessionLocal
 
 
@@ -49,13 +163,66 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+class OAuth2PasswordBearerWithCookie(OAuth2PasswordBearer):
+    async def __call__(self, request: Request = None) -> Optional[str]:
+        # First try to get token from Authorization header
+        authorization = request.headers.get("Authorization")
+        if authorization and authorization.startswith("Bearer "):
+            return authorization.split(" ")[1]
+            
+        # Then try to get token from cookie
+        token = request.cookies.get("access_token")
+        if token and token.startswith("Bearer "):
+            return token.split(" ")[1]
+            
+        # If auto_error is True and no token, raise error
+        if self.auto_error:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return None
+
 # OAuth2 scheme for token authentication
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
+oauth2_scheme = OAuth2PasswordBearerWithCookie(
+    tokenUrl="/api/v1/auth/token",
+    scopes={"api": "Access to the API endpoints"},
+    auto_error=True
+)
+
+# Optional OAuth2 scheme for endpoints that work with or without authentication
+optional_oauth2_scheme = OAuth2PasswordBearerWithCookie(
+    tokenUrl="/api/v1/auth/token",
+    auto_error=False,
+    scopes={"api": "Access to the API endpoints"}
+)
+
+# JWT Configuration
+SECRET_KEY = "your-secret-key"  # Move to environment variable in production
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+TOKEN_URL = "/api/v1/auth/token"  # Full path to token endpoint
+RESET_TOKEN_EXPIRE_MINUTES = 30  # 30 minutes for reset token
+
+# Email configuration
+SMTP_ENABLED = False
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+EMAIL_ADDRESS = "your-email@gmail.com"
+EMAIL_PASSWORD = "your-email-password"
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Captcha
+captcha_store = {}
 
 # This one returns None if token is not present, for optional authentication
 optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token", auto_error=False)
 
 async def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ) -> User:
@@ -73,9 +240,39 @@ async def get_current_user(
         HTTPException: If token is invalid, expired, or doesn't match current session
     """
     if not token:
+        # Try to get token from cookie
+        token = request.cookies.get("access_token")
+        if token and token.startswith("Bearer "):
+            token = token.split(" ")[1]
+    
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"success": False, "message": "Token kiritilmagan"},
+            detail={"success": False, "message": "Avtorizatsiya talab qilinadi"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    # Token tekshirish
+    try:
+        # Decode and verify the token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"success": False, "message": "Yaroqsiz token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"success": False, "message": "Token muddati tugagan"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"success": False, "message": f"Yaroqsiz token: {str(e)}"},
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -199,6 +396,7 @@ async def get_optional_current_user(
 SECRET_KEY = "supersecret"  # Move to environment variable in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+TOKEN_URL = "/api/v1/auth/token"  # Full path to token endpoint
 RESET_TOKEN_EXPIRE_MINUTES = 30  # 30 minutes for reset token
 
 # Email configuration
@@ -209,13 +407,16 @@ EMAIL_ADDRESS = "your-email@gmail.com"
 EMAIL_PASSWORD = "your-email-password"
 
 # Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# Captcha
-captcha_store = {}
-
 def generate_captcha():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+def generate_reset_code():
+    return str(random.randint(100000, 999999))
+
+def generate_temp_password():
+    """Generate a temporary password with letters and numbers"""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(12))
 
 def verify_captcha(code: str):
     return captcha_store.get("code") == code
@@ -246,11 +447,10 @@ class RegisterForm:
     response_model=TokenResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Ro'yxatdan o'tish",
-    description="Yangi foydalanuvchi ro'yxatdan o'tkazish",
-    response_description="Muvaffaqiyatli ro'yxatdan o'tganda access token qaytariladi",
     responses={
         201: {"description": "Foydalanuvchi muvaffaqiyatli ro'yxatdan o'tkazildi"},
-        400: {"description": "Noto'g'ri so'rov yoki foydalanuvchi allaqachon mavjud"},
+        400: {"description": "Noto'g'ri so'rov yoki validatsiya xatosi"},
+        409: {"description": "Bunday foydalanuvchi yoki email allaqachon mavjud"},
         500: {"description": "Server xatosi"}
     }
 )
@@ -259,8 +459,113 @@ async def register(
     db: Session = Depends(get_db)
 ):
     """
-    Yangi foydalanuvchini ro'yxatdan o'tkazish va avtomatik tizimga kirish.
+    Yangi foydalanuvchi ro'yxatdan o'tkazish.
     
+    Muvaffaqiyatli ro'yxatdan o'tganda avtomatik ravishda tizimga kiritiladi
+    va JWT token qaytariladi.
+    """
+    # Validate captcha
+    if not verify_captcha(form_data.captcha):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"success": False, "message": "Noto'g'ri captcha kodi"}
+        )
+    
+    # Check if username already exists
+    existing_user = db.query(User).filter(
+        (User.username == form_data.username) | (User.email == form_data.email)
+    ).first()
+    
+    if existing_user:
+        conflict_field = "username" if existing_user.username == form_data.username else "email"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"success": False, "message": f"Bunday {conflict_field} allaqachon mavjud"}
+        )
+    
+    # Hash the password
+    hashed_password = get_password_hash(form_data.password)
+    
+    # Create new user
+    new_user = User(
+        username=form_data.username,
+        email=form_data.email,
+        hashed_password=hashed_password,
+        is_active=True,
+        is_verified=False,
+        created_at=datetime.utcnow(),
+        last_login=datetime.utcnow()
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # Generate JWT token with 30 days expiration
+    access_token_expires = timedelta(days=30)
+    access_token = create_access_token(
+        data={
+            "sub": str(new_user.id),
+            "username": new_user.username,
+            "email": new_user.email,
+            "scopes": ["api"],
+            "is_admin": False
+        },
+        expires_delta=access_token_expires
+    )
+    
+    # Update user with current token
+    new_user.current_token = access_token
+    db.commit()
+    
+    # Create the response data using TokenResponse model
+    response_data = TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        scope="api",
+        success=True,
+        message="Muvaffaqiyatli ro'yxatdan o'tdingiz",
+        user=UserInfo(
+            id=new_user.id,
+            username=new_user.username,
+            email=new_user.email
+        )
+    )
+    
+    # Create the response with proper headers for Swagger UI
+    response = JSONResponse(
+        content=response_data.model_dump(),
+        status_code=status.HTTP_201_CREATED,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "X-Swagger-UI-Auth-Reset": "true",
+            "X-Swagger-UI-Auth-Token": access_token,
+            "X-Swagger-UI-Auth-Status": "active",
+            "X-Swagger-UI-Auth-Type": "bearer"
+        }
+    )
+    
+    # Set the access token in an HTTP-only cookie for web clients
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {access_token}",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=30 * 24 * 60 * 60,  # 30 days in seconds
+        path="/"
+    )
+    
+    return response
+
+async def login(
+    form_data: LoginRequest = Depends(),
+    db: Session = Depends(get_db)
+):
+    """
+    Foydalanuvchi nomi va parol orqali tizimga kirish.
+    
+    Muvaffaqiyatli kirishda avtomatik ravishda JWT token qaytariladi.
     Muvaffaqiyatli ro'yxatdan o'tganda avtomatik ravishda tizimga kiritiladi
     va JWT token qaytariladi.
     """
@@ -269,6 +574,10 @@ async def register(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"success": False, "message": "Noto'g'ri captcha kodi"}
         )
+    
+    # Get country code from IP address
+    client_ip = request.client.host
+    country_code = await ip_service.get_country_code(client_ip)
     
     # Check if user exists by querying only the ID to avoid missing column errors
     existing_user = db.query(User.id).filter(
@@ -299,31 +608,43 @@ async def register(
         hashed_password=hashed_password,
         full_name=form_data.username,
         bio="",
-        website="",
         profile_picture="static/images/users/default.png",
         is_private=False,
         is_active=True,
         is_admin=False,
-        last_login=datetime.utcnow()
+        last_login=datetime.utcnow(),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        country=None,
+        region=None,
+        city=None,
+        latitude=None,
+        longitude=None,
+        timezone=None
     )
     
     # Get client IP and location
-    try:
-        client_ip = GeoIPService.get_client_ip(form_data.request)
-        location_info = await GeoIPService.get_location_from_ip(client_ip)
-        
-        # Update user with location info
-        new_user.registration_ip = client_ip
-        new_user.last_ip = client_ip
-        new_user.country = location_info.get('country')
-        new_user.region = location_info.get('region')
-        new_user.city = location_info.get('city')
-        new_user.latitude = location_info.get('latitude')
-        new_user.longitude = location_info.get('longitude')
-        new_user.timezone = location_info.get('timezone')
-    except Exception as e:
-        # Log the error but don't fail registration
-        logger.error(f"Error getting location info: {str(e)}")
+    client_ip = request.client.host
+    
+    # Get location info from IP
+    if client_ip:
+        try:
+            ip_info = await ip_service.get_country_from_ip(client_ip)
+            if ip_info:
+                # Update user with location info
+                new_user.registration_ip = client_ip
+                new_user.last_ip = client_ip
+                new_user.country = ip_info.get('country')
+                new_user.region = ip_info.get('region')
+                new_user.city = ip_info.get('city')
+                new_user.latitude = ip_info.get('latitude')
+                new_user.longitude = ip_info.get('longitude')
+                new_user.timezone = ip_info.get('timezone')
+                logger.info(f"Detected location: {ip_info.get('country')}, {ip_info.get('city')} for IP: {client_ip}")
+        except Exception as e:
+            logger.error(f"Error getting location from IP {client_ip}: {str(e)}")
+            # Don't fail registration if location detection fails
+            pass
     
     # Create the user in the database
     db.add(new_user)
@@ -348,46 +669,39 @@ async def register(
         
         # Create default settings for the new user
         try:
-            # If you have a UserSettings model, uncomment and modify this section
-            # default_settings = models.UserSettings(
-            #     user_id=new_user.id,
-            #     # Add any default settings here
-            # )
-            # db.add(default_settings)
-            # db.commit()
-            pass
-        except Exception as settings_error:
-            db.rollback()
-            print(f"Warning: Could not create default settings: {str(settings_error)}")
-            # Continue even if settings creation fails
-        
-
-            # Create response data that matches TokenResponse model
-            response_data = {
-                "access_token": access_token,
-                "token_type": "bearer",
-                "expires_in": int(access_token_expires.total_seconds()),
-                "refresh_token": None  # Optional field in TokenResponse
-            }
-            
-            # Create response object with the token data
-            response = Response(
-                content=json.dumps(response_data),
-                media_type="application/json",
-                status_code=status.HTTP_201_CREATED
+            # Create user settings
+            user_settings = UserSettings(
+                user_id=new_user.id,
+                preferred_country=country_code,
+                show_country_posts=True
             )
-            
-            # Set headers for Swagger UI auto-authorization
-            response.headers["access-token"] = access_token
-            response.headers["token-type"] = "bearer"
-            response.headers["Authorization"] = f"Bearer {access_token}"
-            
-            return response_data
-                
+            db.add(user_settings)
+            db.commit()
+        except Exception as e:
+            # Log the error but don't fail the registration
+            logger.error(f"Error creating default user settings: {str(e)}")
+        
+        # Return the access token and user info
+        return {
+            "success": True,
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": new_user.id,
+                "username": new_user.username,
+                "email": new_user.email,
+                "full_name": new_user.full_name,
+                "profile_picture": new_user.profile_picture,
+                "is_admin": new_user.is_admin,
+                "is_private": new_user.is_private,
+                "is_active": new_user.is_active,
+                "created_at": new_user.created_at.isoformat() if new_user.created_at else None
+            }
+        }
     except Exception as e:
         db.rollback()
         error_detail = str(e)
-        print(f"Registration error: {error_detail}")
+        logger.error(f"Registration error: {error_detail}", exc_info=True)
         
         # Check for common database errors
         if "UNIQUE constraint failed" in error_detail:
@@ -421,7 +735,7 @@ def generate_reset_code() -> str:
     "/logout", 
     response_model=dict, 
     summary="Tizimdan chiqish",
-    description="Joriy foydalanuvchi uchun sessiyani tugatish",
+    description="Joriy foydalanuvchi uchun sessiyani tugatish. Tokenlarni tozalash va foydalanuvchini tizimdan chiqarish.",
     responses={
         200: {"description": "Muvaffaqiyatli chiqish"},
         401: {"description": "Avtorizatsiyadan o'tilmagan"}
@@ -429,7 +743,8 @@ def generate_reset_code() -> str:
 )
 async def logout(
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Joriy foydalanuvchi uchun sessiyani tugatish.
@@ -437,91 +752,116 @@ async def logout(
     Ushbu amal foydalanuvchining joriy tokenini o'chiradi va uni tizimdan chiqaradi.
     Keyingi kirish uchun qaytadan autentifikatsiyadan o'tish talab qilinadi.
     """
-    # Get the token from the Authorization header
+    token = None
+    
+    # Try to get token from Authorization header
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    
+    # If no token in header, try to get from cookies
+    if not token and "access_token" in request.cookies:
+        cookie_token = request.cookies.get("access_token")
+        if cookie_token and cookie_token.startswith("Bearer "):
+            token = cookie_token.split(" ")[1]
+    
+    if not token:
         return {
             "success": False,
-            "message": "Token kiritilmagan",
+            "message": "Token topilmadi",
             "logged_out": False
         }
     
-    token = auth_header.split(" ")[1]
-    
     try:
-        # Manually decode the token to get the user ID
+        # Verify the token is valid and get the user
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
         
-        if not user_id:
-            return {
-                "success": False,
-                "message": "Yaroqsiz token",
-                "logged_out": False
-            }
-            
-        # Get the user from the database
-        user = db.query(User).filter(User.id == int(user_id)).first()
-        if not user:
-            return {
-                "success": False,
-                "message": "Foydalanuvchi topilmadi",
-                "logged_out": False
-            }
-            
-        # Check if the token matches the current token
-        if user.current_token != token:
-            return {
-                "success": False,
-                "message": "Yaroqsiz token",
-                "logged_out": False
-            }
-            
-        # Clear the current token
-        was_logged_in = bool(user.current_token)
-        user.current_token = None
+        if not user_id or int(user_id) != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Yaroqsiz token"
+            )
+        
+        # Clear the current token in the database
+        current_user.current_token = None
         db.commit()
         
-        if was_logged_in:
-            return {
-                "success": True, 
-                "message": "Siz muvaffaqiyatli tizimdan chiqdingiz",
-                "logged_out": True
-            }
-            
-        return {
-            "success": True, 
-            "message": "Siz allaqachon tizimdan chiqib bo'lgansiz",
-            "logged_out": False
+        # Create response with success message
+        response_data = {
+            "success": True,
+            "message": "Siz muvaffaqiyatli tizimdan chiqdingiz",
+            "logged_out": True
         }
         
+        # Create response with JSON content
+        response = JSONResponse(
+            content=response_data,
+            status_code=status.HTTP_200_OK
+        )
+        
+        # Clear the access token from cookies
+        response.delete_cookie(
+            key="access_token",
+            path="/",
+            domain=None,
+            secure=True,
+            httponly=True,
+            samesite="lax"
+        )
+        
+        # Clear Swagger UI authentication
+        response.headers["Authorization"] = ""
+        response.headers["X-Swagger-UI-Auth-Reset"] = "true"
+        response.headers["X-Swagger-UI-Auth-Status"] = "inactive"
+        response.headers["X-Swagger-UI-Auth-Token"] = ""
+        
+        return response
+        
     except jwt.ExpiredSignatureError:
-        # If token is expired, still allow logout
+        # If token is expired, still clear the token from the user record
         try:
-            # Get the user ID from the expired token
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
             user_id = payload.get("sub")
-            if user_id:
-                user = db.query(User).filter(User.id == int(user_id)).first()
-                if user and user.current_token == token:
-                    user.current_token = None
-                    db.commit()
-                    return {
+            
+            if user_id and int(user_id) == current_user.id and current_user.current_token == token:
+                current_user.current_token = None
+                db.commit()
+                
+                response = JSONResponse(
+                    content={
                         "success": True,
                         "message": "Sessiya muddati tugaganligi sabab tizimdan chiqarildi",
                         "logged_out": True
-                    }
-        except Exception:
-            pass
+                    },
+                    status_code=status.HTTP_200_OK
+                )
+                
+                # Clear cookies and headers
+                response.delete_cookie("access_token", path="/", secure=True, httponly=True, samesite="lax")
+                response.headers.update({
+                    "Authorization": "",
+                    "X-Swagger-UI-Auth-Reset": "true",
+                    "X-Swagger-UI-Auth-Status": "inactive",
+                    "X-Swagger-UI-Auth-Token": ""
+                })
+                return response
+                
+        except Exception as e:
+            logger.error(f"Error during expired token cleanup: {str(e)}")
             
-    except JWTError as e:
-        print(f"JWT Error during logout: {str(e)}")
+        # If we get here, the token was expired but we couldn't clear it
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sessiya muddati tugagan"
+        )
         
-    return {
-        "success": False,
-        "message": "Tizimdan chiqishda xatolik yuz berdi",
-        "logged_out": False
-    }
+    except (JWTError, Exception) as e:
+        logger.error(f"Logout error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Tizimdan chiqishda xatolik yuz berdi"
+        )
 
 class LoginForm:
     def __init__(
@@ -535,242 +875,203 @@ class LoginForm:
         self.captcha = captcha
 
 @router.post(
-    "/token",
+    "/login",
     response_model=TokenResponse,
-    summary="Tizimga kirish",
-    description="Foydalanuvchi nomi, parol va captcha orqali tizimga kiring",
-    response_description="Kirish muvaffaqiyatli bo'lganda access token qaytariladi",
+    response_model_exclude_unset=True,
+    tags=["Authentication"],
+    summary="User login",
+    description="Authenticate user and return JWT token",
     responses={
-        200: {"description": "Muvaffaqiyatli kirish"},
-        400: {"description": "Noto'g'ri so'rov"},
-        401: {"description": "Kirish rad etildi"},
-        403: {"description": "Akkaunt boshqa qurilmada ochiq"}
+        200: {
+            "description": "Successful authentication",
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/TokenResponse"}
+                }
+            },
+        },
+        401: {
+            "description": "Noto'g'ri foydalanuvchi nomi yoki parol",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "success": False,
+                            "message": "Noto'g'ri foydalanuvchi nomi yoki parol"
+                        }
+                    }
+                }
+            }
+        }
     }
 )
-async def login_for_access_token(
-    form_data: LoginForm = Depends(),
+async def login(
+    form_data: LoginRequest = Depends(),
     db: Session = Depends(get_db)
 ):
     """
     Foydalanuvchi tizimga kirishi uchun endpoint.
     
-    Agar foydalanuvchi boshqa qurilmada kirgan bo'lsa, xatolik qaytaradi.
     Muvaffaqiyatli kirishda JWT token qaytariladi.
     """
-    if not verify_captcha(form_data.captcha):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"success": False, "message": "Noto'g'ri captcha kodi"}
-        )
-
-    # Get the full user object to check for existing sessions
+    # Verify user credentials
     user = db.query(User).filter(User.username == form_data.username).first()
-    
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"success": False, "message": "Noto'g'ri foydalanuvchi nomi yoki parol"},
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": "Bearer"}
         )
+        
+    # Check if user is blocked by any admin
+    from models.block import Block
+    is_blocked = db.query(Block).filter(
+        Block.blocked_id == user.id
+    ).first() is not None
     
-    # Check if user is already logged in from another device
-    if user.current_token:
-        try:
-            # Verify if the token is still valid
-            jwt.decode(user.current_token, SECRET_KEY, algorithms=[ALGORITHM])
-            # If we get here, token is still valid - user is already logged in
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "success": False, 
-                    "message": "Siz allaqachon boshqa qurilmadan kirgansiz. Iltimos, avval o'sha yerdan chiqib keling."
-                }
-            )
-        except JWTError:
-            # Token is expired or invalid, safe to proceed with new login
-            pass
-    
-    try:
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": str(user.id), "username": user.username}, 
-            expires_delta=access_token_expires
-        )
-        
-        # Update user's current token and last login
-        user.current_token = access_token
-        user.last_login = datetime.utcnow()
-        db.commit()
-        db.refresh(user)
-        
-        # Create response with token in both body and header for Swagger UI
-        response_data = {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user_id": user.id,
-            "username": user.username,
-            "expires_in": int(access_token_expires.total_seconds())
-        }
-        
-        # This format is recognized by Swagger UI for auto-authorization
-        response = Response(
-            content=json.dumps({
-                "access_token": access_token,
-                "token_type": "bearer"
-            }),
-            media_type="application/json"
-        )
-        
-        # Set headers for Swagger UI auto-authorization
-        response.headers["access-token"] = access_token
-        response.headers["token-type"] = "bearer"
-        response.headers["Authorization"] = f"Bearer {access_token}"
-        
-        return response_data
-        
-    except Exception as e:
-        db.rollback()
-        print(f"Error during login: {str(e)}")
+    if is_blocked:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"success": False, "message": "Tizimga kirishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring."}
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"success": False, "message": "Ushbu foydalanuvchi bloklangan"}
         )
 
-def send_reset_email(email: str, code: str):
-    """For development: Return the code in response instead of sending email"""
-    if SMTP_ENABLED:
-        try:
-            msg = MIMEMultipart()
-            msg['From'] = EMAIL_ADDRESS
-            msg['To'] = email
-            msg['Subject'] = "Parolni tiklash kodi"
+    # Generate JWT token with 30 days expiration
+    access_token_expires = timedelta(days=30)  # 30 days expiration
+    access_token = create_access_token(
+        data={
+            "sub": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "scopes": ["api"],
+            "is_admin": user.is_admin if hasattr(user, 'is_admin') else False
+        },
+        expires_delta=access_token_expires
+    )
+    
+    # Update last login time and set current token
+    user.last_login = datetime.utcnow()
+    user.current_token = access_token  # Store the token in user record
+    db.commit()
+    db.refresh(user)
+    
+    # Create the response data using TokenResponse model
+    response_data = TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        scope="api",
+        success=True,
+        message="Tizimga kiritildi",
+        user=UserInfo(
+            id=user.id,
+            username=user.username,
+            email=user.email
+        )
+    )
+    
+    # Create the response with proper headers for Swagger UI
+    response = JSONResponse(
+        content=response_data.model_dump(),
+        status_code=200,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "X-Swagger-UI-Auth-Reset": "true",
+            "X-Swagger-UI-Auth-Token": access_token,
+            "X-Swagger-UI-Auth-Status": "active",
+            "X-Swagger-UI-Auth-Type": "bearer"
+        }
+    )
+    
+    # Set the access token in an HTTP-only cookie for web clients
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {access_token}",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=30 * 24 * 60 * 60,  # 30 days in seconds
+        path="/"
+    )
+    
+    # Return the response with all headers and cookies set
+    return response
 
-            body = f"""
-            <h2>Parolni tiklash so'rovi</h2>
-            <p>Parolingizni tiklash uchun quyidagi koddan foydalaning:</p>
-            <h1 style="color: #4CAF50; font-size: 24px; text-align: center; padding: 10px; background: #f0f0f0; border-radius: 5px; letter-spacing: 5px;">{code}</h1>
-            <p>Bu kod {RESET_TOKEN_EXPIRE_MINUTES} daqiqa davomida amal qiladi.</p>
-            </p>Rahmat!</p>
-            """
-
-            msg.attach(MIMEText(body, 'html'))
-
-            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-                server.starttls()
-                server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-                server.send_message(msg)
-        except Exception as e:
-            print(f"Email yuborishda xatolik: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"message": "Email yuborishda xatolik yuz berdi"}
-            )
-    else:
-        print(f"[DEBUG] Password reset code for {email}: {code}")
-
-@router.post("/request-reset", summary="Parolni tiklash uchun kod so'raladi")
+@router.post("/password-reset/request", response_model=schemas.BaseResponse, summary="Parolni tiklash kodini so'rab olish", tags=["Password Reset"])
 async def request_password_reset(
     request: PasswordResetRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Parolni tiklash uchun kod generatsiya qilish va foydalanuvchiga qaytarish
+    Parolni tiklash uchun kod so'rab olish
     """
-    # Check if user exists with this email
+    # Find user by email
     user = db.query(User).filter(User.email == request.email).first()
     if not user:
-        # For security, don't reveal if email exists or not
-        return {
-            "success": False,
-            "message": "Agar bu email ro'yxatdan o'tgan bo'lsa, parolni tiklash kodi yuboriladi"
+        return schemas.BaseResponse(
+            success=False,
+            message="Bu email bilan ro'yxatdan o'tgan foydalanuvchi topilmadi"
+        )
+
+    try:
+        # Generate reset code
+        reset_code = generate_reset_code()
+        
+        # Generate temporary password
+        temp_password = generate_temp_password()
+        
+        # Update user's password
+        user.hashed_password = pwd_context.hash(temp_password)
+        
+        # Check for existing token
+        existing_token = db.query(PasswordResetToken).filter_by(user_id=user.id).first()
+        
+        if existing_token:
+            # Update existing token
+            existing_token.token = reset_code
+            existing_token.expires_at = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
+        else:
+            # Create new token
+            reset_token = PasswordResetToken(
+                user_id=user.id,
+                token=reset_code,
+                expires_at=datetime.utcnow() + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
+            )
+            db.add(reset_token)
+            
+        db.commit()
+
+        # Prepare user profile data
+        user_profile = {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "bio": user.bio,
+            "profile_picture": user.profile_picture,
+            "created_at": user.created_at.isoformat(),
+            "is_active": user.is_active
         }
 
-    # Generate a reset code
-    reset_code = generate_reset_code()
-    expires_at = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
-
-    # Create or update reset token
-    reset_token = db.query(PasswordResetToken).filter(
-        PasswordResetToken.email == request.email
-    ).first()
-
-    if reset_token:
-        reset_token.token = reset_code
-        reset_token.expires_at = expires_at
-        reset_token.used = False
-    else:
-        reset_token = PasswordResetToken(
-            email=request.email,
-            token=reset_code,
-            expires_at=expires_at
+        return schemas.BaseResponse(
+            success=True,
+            message="Parol muvaffaqiyatli yangilandi",
+            data={
+                "user": user_profile,
+                "temp_password": temp_password
+            }
         )
-        db.add(reset_token)
-
-    db.commit()
-
-    # For development, return the code in the response
-    send_reset_email(request.email, reset_code)
-
-    return {
-        "success": True,
-        "message": "Parolni tiklash kodi yuborildi",
-        "reset_code": reset_code,  # Only for development
-        "user_id": user.id  # Return user_id for the next step
-    }
-
-@router.post("/verify-code", summary="Kodni tekshirish")
-async def verify_reset_code(
-    request: VerifyCodeRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    Kodni tekshirish va yangi parol o'rnatish uchun token qaytarish
-    """
-    # Find the reset token
-    reset_token = db.query(PasswordResetToken).filter(
-        PasswordResetToken.token == request.code,
-        PasswordResetToken.used == False,
-        PasswordResetToken.expires_at > datetime.utcnow()
-    ).first()
-
-    if not reset_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"success": False, "message": "Noto'g'ri yoki muddati o'tgan kod"}
+    except Exception as e:
+        db.rollback()
+        return schemas.BaseResponse(
+            success=False,
+            message="Xatolik yuz berdi: " + str(e)
         )
 
-    # Get user by email from the token
-    user = db.query(User).filter(User.email == reset_token.email).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"success": False, "message": "Foydalanuvchi topilmadi"}
-        )
-
-    # Mark token as used
-    reset_token.used = True
-    db.commit()
-
-    # Generate a short-lived JWT token for password reset
-    access_token_expires = timedelta(minutes=15)
-    access_token = create_access_token(
-        data={"sub": str(user.id), "reset": True},
-        expires_delta=access_token_expires
-    )
-
-    return {
-        "success": True,
-        "message": "Kod tasdiqlandi",
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user_id": user.id
-    }
-
-@router.post("/reset-password/{user_id}", summary="Yangi parol o'rnatish")
+@router.post("/password-reset/reset", response_model=schemas.Message, summary="Yangi parol o'rnatish", tags=["Password Reset"])
 async def reset_password(
     user_id: int,
     request: NewPasswordRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Yangi parol o'rnatish (Authentication kerak emas)
@@ -810,11 +1111,12 @@ async def reset_password(
         "message": "Parol muvaffaqiyatli yangilandi"
     }
 
-@router.post("/change-password/{user_id}", status_code=status.HTTP_200_OK)
+@router.post("/password-reset/change", response_model=schemas.Message, summary="Parolni o'zgartirish", tags=["Password Reset"])
 async def change_password(
     user_id: int,
     request: PasswordUpdateRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     """
     Parolni o'zgartirish (Authentication kerak emas)

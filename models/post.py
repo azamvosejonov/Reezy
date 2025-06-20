@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from enum import Enum as PyEnum
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, Table, Boolean, Enum
 from sqlalchemy.orm import relationship
@@ -42,11 +42,44 @@ class Post(Base):
     __tablename__ = 'posts'
     
     id = Column(Integer, primary_key=True, index=True)
-    content = Column(Text, nullable=True, comment='Text content of the post, nullable for media-only posts')
-    
-    # Media fields
+    content = Column(Text, nullable=True, comment='Text content of the post')
     media_url = Column(String(512), nullable=True, comment='URL to the media file')
     media_type = Column(media_type_enum, nullable=True, comment='Type of media (image or video)')
+    created_ip = Column(String(45), nullable=True, comment='IP address of the user who created the post')
+    country_code = Column(String(2), nullable=True, comment='Country code of the post creator')
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    
+    @property
+    def validate_media_fields(self) -> 'PostCreate':
+        """Validate media fields."""
+        if self.media_url and not self.media_type:
+            raise ValueError("media_type is required when media_url is provided")
+        if self.media_type and not self.media_url:
+            raise ValueError("media_url is required when media_type is provided")
+        if self.media_url and self.media_type:
+            if self.media_type not in [MediaType.IMAGE, MediaType.VIDEO]:
+                raise ValueError(f"Invalid media_type: {self.media_type}")
+            if not self.media_url.startswith('/media/posts/'):
+                raise ValueError("media_url must start with '/media/posts/'")
+        return self
+
+    @property
+    def has_media(self) -> bool:
+        """Check if the post has media."""
+        return bool(self.media_url and self.media_type)
+    
+    @property
+    def media_info(self) -> Optional[dict]:
+        """Get media information as a dictionary."""
+        if self.has_media:
+            return {
+                'url': self.media_url,
+                'type': self.media_type,
+                'created_at': self.created_at.isoformat()
+            }
+        return None
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -167,4 +200,4 @@ class Post(Base):
         return data
         
     def __repr__(self) -> str:
-        return f"<Post(id={self.id}, user_id={self.user_id}, media_type={self.media_type})>"
+        return f"<Post {self.id} by User {self.user_id}>"

@@ -6,9 +6,11 @@ from typing import Optional, Dict, Any, Literal, List, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 
+import models
 # Import AI services
 from ai.services.ai_service import AIService
 from ai.api.endpoints.ai import TextGenerationRequest
+from main import get_current_user
 
 # Create router
 router = APIRouter(
@@ -54,7 +56,10 @@ class AdAnalysisResponse(BaseModel):
         }
 
 @router.post("/generate", summary="Generate text using AI")
-async def generate_text(request: AIModelRequest):
+async def generate_text(
+    request: AIModelRequest,
+    current_user: models.User = Depends(get_current_user)
+):
     """
     Generate text using the specified AI model with rate limiting.
     
@@ -87,7 +92,8 @@ async def generate_text(request: AIModelRequest):
 async def analyze_ad(
     title: str,
     description: Optional[str] = None,
-    target_audience: Optional[str] = None
+    target_audience: Optional[str] = None,
+    current_user: models.User = Depends(get_current_user)
 ):
     """
     Analyze an advertisement for optimization recommendations.
@@ -130,8 +136,10 @@ async def analyze_ad(
             "error": {"detail": str(e)}
         }
 
-@router.get("/rate-limit", summary="Get current rate limit status")
-async def get_rate_limit_status():
+@router.get("/rate-limit", summary="Get rate limit status")
+async def get_rate_limit_status(
+    current_user: models.User = Depends(get_current_user)
+):
     """
     Get the current rate limit status.
     
@@ -147,8 +155,10 @@ async def get_rate_limit_status():
             detail=f"Failed to get rate limit status: {str(e)}"
         )
 
-@router.get("/health", status_code=200)
-async def health_check():
+@router.get("/health", summary="Check AI service health")
+async def health_check(
+    current_user: models.User = Depends(get_current_user)
+):
     """
     Health check endpoint for the AI service.
     

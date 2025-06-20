@@ -1,17 +1,23 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base, declared_attr
 from sqlalchemy.orm import sessionmaker, scoped_session, configure_mappers
-import os
-import sys
+from config import settings
 from typing import Any, Dict, Type
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/reezy")
+# Use database URL from settings
+SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
-# Remove SQLite-specific argument for PostgreSQL
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    pool_pre_ping=True
-)
+# Create engine with appropriate connection args based on database type
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False},
+        pool_pre_ping=True
+    )
+else:
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        pool_pre_ping=True
+    )
 
 # Use scoped_session for thread-local sessions
 SessionLocal = scoped_session(

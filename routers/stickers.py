@@ -9,7 +9,7 @@ from models.user import User
 from services.sticker_service import StickerService
 from routers.auth import get_current_user
 
-router = APIRouter(prefix="/api/v1/stickers", tags=["stickers"])
+router = APIRouter(prefix="/api/v1/stickers",)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 logger = logging.getLogger(__name__)
 
