@@ -13,7 +13,6 @@ cachetools==5.5.2
 celery>=5.3.6,<6.0
 certifi==2025.4.26
 cffi==1.17.1
-chardet==3.0.4
 charset-normalizer==3.4.2
 circuitbreaker==2.1.3
 click>=8.0.4,<9.0
@@ -38,7 +37,7 @@ redis==5.0.1
 websockets==12.0
 aiosignal==1.3.2
 async-timeout==4.0.3
-chardet==5.2.0
+chardet>=3.0.4
 multidict==6.0.4
 yarl==1.9.4
 aioredis==2.0.1
