@@ -23,4 +23,9 @@ celery.conf.beat_schedule = {
         'task': 'tasks.update_data',
         'schedule': 3.0,  # Har 3 soniyada
     },
+    # Add this to ensure the task is recognized
+    'cleanup_old_media': {
+        'task': 'tasks.cleanup_old_media',
+        'schedule': crontab(hour=0, minute=0),  # Daily at midnight
+    },
 }
