@@ -1,74 +1,49 @@
-version: "3.8"
+version: '3.8'
 
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     restart: unless-stopped
     ports:
       - "8090:8000"
     volumes:
+      - .:/app
       - ./uploads:/app/uploads
       - ./media:/app/media
       - ./static:/app/static
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/reezy
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-    networks:
-      - app-network
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
+      start_period: 5s
 
   db:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=reezy
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-reezy}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data/
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-reezy}"]
       interval: 5s
       timeout: 5s
       retries: 5
-    networks:
-      - app-network
-    command: >
-      postgres
-      -c shared_preload_libraries=pg_stat_statements
-      -c pg_stat_statements.max=10000
-      -c pg_stat_statements.track=all
-      -c max_connections=200
-      -c shared_buffers=256MB
-      -c effective_cache_size=1GB
-      -c work_mem=4MB
-      -c maintenance_work_mem=64MB
 
   redis:
     image: redis:7-alpine
@@ -79,76 +54,44 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - app-network
-    command: >
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --tcp-keepalive 60
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   celery:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: always
-    command: celery -A celery_app.celery worker --loglevel=INFO --pool=solo
+    build: .
+    restart: unless-stopped
+    command: celery -A celery_app worker --loglevel=info
+    volumes:
+      - .:/app
     env_file:
       - .env
     environment:
-      - C_FORCE_ROOT=true
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - app-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    healthcheck:
-      test: ["CMD", "celery", "-A", "celery_config.app", "inspect", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   celery-beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: always
-    command: celery -A celery_app.celery beat --loglevel=INFO --scheduler celery.beat.PersistentScheduler --schedule /app/celerybeat-schedule/celerybeat-schedule.db
+    build: .
+    restart: unless-stopped
+    command: celery -A celery_app beat --loglevel=info
     volumes:
-      - ./celerybeat-schedule:/app/celerybeat-schedule
+      - .:/app
     env_file:
       - .env
     environment:
-      - C_FORCE_ROOT=true
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    user: appuser
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - app-network
 
 volumes:
   postgres_data:
-    driver: local
   redis_data:
-    driver: local
-
-networks:
-  app-network:
-    driver: bridge
