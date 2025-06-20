@@ -28,4 +28,9 @@ celery.conf.beat_schedule = {
         'task': 'tasks.cleanup_old_media',
         'schedule': crontab(hour=0, minute=0),  # Daily at midnight
     },
+    # Add this to ensure the task is recognized
+    'cleanup_old_media': {
+        'task': 'tasks.cleanup_old_media',
+        'schedule': crontab(hour=0, minute=0),  # Daily at midnight
+    },
 }
