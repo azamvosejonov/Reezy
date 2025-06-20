@@ -1,6 +1,7 @@
 from celery import Celery
 from celery.schedules import crontab
 from config import settings
+from tasks import update_data
 
 celery = Celery(
     __name__,
@@ -8,6 +9,9 @@ celery = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
     include=['tasks', 'tasks.post_tasks']  # Include tasks from both files
 )
+
+# Register the task explicitly
+celery.register_task(update_data)
 
 celery.conf.update(
     task_serializer='json',
