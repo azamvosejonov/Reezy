@@ -52,12 +52,11 @@ WORKDIR /app
 RUN mkdir -p /app/uploads /app/media /app/static /app/celerybeat-schedule && \
     chown -R root:root /app/celerybeat-schedule && \
     chmod -R 777 /app/celerybeat-schedule && \
+    chown -R appuser:appuser /app && \
     chown -R appuser:appuser /app
 
-# Create celerybeat schedule file with proper permissions
-RUN touch /app/celerybeat-schedule/celerybeat-schedule.db && \
-    chown root:root /app/celerybeat-schedule/celerybeat-schedule.db && \
-    chmod 777 /app/celerybeat-schedule/celerybeat-schedule.db && \
+# Use Redis for celerybeat schedule instead of file-based storage
+RUN rm -f /app/celerybeat-schedule/celerybeat-schedule.db && \
     chown appuser:appuser /app/celerybeat-schedule/celerybeat-schedule.db
 
 # Add app directory to PYTHONPATH

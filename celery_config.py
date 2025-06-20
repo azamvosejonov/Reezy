@@ -7,6 +7,12 @@ app = Celery(
     include=['tasks.post_tasks']
 )
 
+# Configure Redis as the scheduler
+app.conf.update(
+    beat_scheduler='celery.beat:PersistentScheduler',
+    beat_schedule_filename='redis://redis:6379/0'
+)
+
 app.conf.beat_schedule = {
     'periodic-task': {
         'task': 'tasks.periodic_task',
