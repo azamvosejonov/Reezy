@@ -1,13 +1,15 @@
-# Use multi-stage build for smaller final image
-FROM python:3.11-slim as builder
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim
 
-# Set environment variables for build stage
+# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONPATH=/app
 
-# Install build dependencies
+# Set work directory
+WORKDIR /app
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -15,66 +17,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy and install requirements
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt
 
-# Production stage
-FROM python:3.11-slim
+# Copy project
+COPY . .
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+# Create necessary directories
+RUN mkdir -p /app/uploads /app/media /app/static
 
-# Install runtime dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Copy virtual environment from builder stage
-COPY --from=builder /opt/venv /opt/venv
-
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-
-# Set work directory
-WORKDIR /app
-
-# Create necessary directories with proper permissions
-RUN mkdir -p /app/uploads /app/media /app/static /app/celerybeat-schedule && \
-    chown -R root:root /app/celerybeat-schedule && \
-    chmod -R 777 /app/celerybeat-schedule && \
-    chown -R appuser:appuser /app && \
-    chown -R appuser:appuser /app
-
-# Use Redis for celerybeat schedule instead of file-based storage
-RUN if [ -f "/app/celerybeat-schedule/celerybeat-schedule.db" ]; then \
-    rm -f /app/celerybeat-schedule/celerybeat-schedule.db; \
-    fi
-
-# Add app directory to PYTHONPATH
-ENV PYTHONPATH=/app:$PYTHONPATH
-
-# Copy project files
-COPY --chown=appuser:appuser . .
-
-# Switch to non-root user
-USER appuser
-
-# Expose port
+# Expose the port the app runs on
 EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
 
 # Command to run the application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
