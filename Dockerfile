@@ -26,25 +26,14 @@ RUN pip install --upgrade pip pip-tools
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Use pip-tools to resolve conflicts automatically
-RUN pip-compile --resolver=backtracking requirements.txt --output-file requirements-resolved.txt || \
-    (echo "Trying alternative resolution method..." && \
-     pip install --no-deps -r requirements.txt 2>/dev/null || \
-     pip install --force-reinstall --no-deps click==8.0.4 && \
-     pip install --force-reinstall --no-deps celery==5.2.7 && \
-     pip install --force-reinstall --no-deps gtts==2.5.3 && \
-     pip install --force-reinstall --no-deps oci-cli==3.59.0 && \
-     pip install -r requirements.txt --force-reinstall)
+# Fix the billiard version conflict before installation
+RUN sed -i 's/billiard==4.2.1/billiard>=3.6.4.0,<4.0/' requirements.txt
 
-# Alternative: Install problematic packages separately with specific versions
-RUN pip install \
-    click==8.0.4 \
-    celery==5.2.7 \
-    gtts==2.5.3 \
-    oci-cli==3.59.0
-
-# Install remaining packages
-RUN pip install -r requirements.txt --force-reinstall
+# Try pip-compile first, fallback to direct installation
+RUN pip-compile --resolver=backtracking requirements.txt --output-file requirements-resolved.txt && \
+    pip install -r requirements-resolved.txt || \
+    (echo "Pip-compile failed, installing directly from requirements.txt..." && \
+     pip install -r requirements.txt)
 
 # Copy project
 COPY . .
