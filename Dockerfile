@@ -59,6 +59,9 @@ RUN touch /app/celerybeat-schedule/celerybeat-schedule && \
     chown appuser:appuser /app/celerybeat-schedule/celerybeat-schedule && \
     chmod 666 /app/celerybeat-schedule/celerybeat-schedule
 
+# Add app directory to PYTHONPATH
+ENV PYTHONPATH=/app:$PYTHONPATH
+
 # Copy project files
 COPY --chown=appuser:appuser . .
 

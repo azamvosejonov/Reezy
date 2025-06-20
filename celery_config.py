@@ -10,6 +10,6 @@ app = Celery(
 app.conf.beat_schedule = {
     'periodic-task': {
         'task': 'tasks.periodic_task',
-        'schedule': 300.0  # 5 minutda bir
+        'schedule': 300.0  # 5 minutes
     }
 }
