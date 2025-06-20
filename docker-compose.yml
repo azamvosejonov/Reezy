@@ -1,4 +1,4 @@
-version: "3"
+version: "3.8"
 
 services:
   app:
@@ -116,6 +116,11 @@ services:
         limits:
           cpus: '0.5'
           memory: 512M
+    healthcheck:
+      test: ["CMD", "celery", "-A", "celery_config.app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   celery-beat:
     build:
@@ -128,13 +133,16 @@ services:
     env_file:
       - .env
     environment:
+      - C_FORCE_ROOT=true
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - app-network
+
 volumes:
   postgres_data:
     driver: local
