@@ -1,17 +1,15 @@
 from celery import Celery
 from celery.schedules import crontab
 from config import settings
-from tasks import update_data
+from main_tasks import update_data
+from tasks.post_tasks import cleanup_old_media, create_post_task, process_mentions, generate_video_thumbnail
 
 celery = Celery(
     __name__,
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=['tasks', 'tasks.post_tasks']  # Include tasks from both files
+    include=['main_tasks', 'tasks.post_tasks']  # Include tasks from both files
 )
-
-# Register the task explicitly
-celery.register_task(update_data)
 
 celery.conf.update(
     task_serializer='json',
@@ -24,17 +22,11 @@ celery.conf.update(
 # Davriy vazifani sozlash
 celery.conf.beat_schedule = {
     'update-data-every-3-seconds': {
-        'task': 'tasks.update_data',
+        'task': 'main_tasks.update_data',
         'schedule': 3.0,  # Har 3 soniyada
     },
-    # Add this to ensure the task is recognized
-    'cleanup_old_media': {
-        'task': 'tasks.cleanup_old_media',
-        'schedule': crontab(hour=0, minute=0),  # Daily at midnight
-    },
-    # Add this to ensure the task is recognized
-    'cleanup_old_media': {
-        'task': 'tasks.cleanup_old_media',
+    'cleanup-old-media': {
+        'task': 'tasks.post_tasks.cleanup_old_media',
         'schedule': crontab(hour=0, minute=0),  # Daily at midnight
     },
 }
