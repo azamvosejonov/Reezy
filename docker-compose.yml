@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3"
 
 services:
   app:
@@ -123,6 +123,8 @@ services:
       dockerfile: Dockerfile
     restart: always
     command: celery -A celery_config.app beat --loglevel=INFO --scheduler celery.beat.PersistentScheduler --schedule /app/celerybeat-schedule
+    volumes:
+      - ./celerybeat-schedule:/app/celerybeat-schedule
     env_file:
       - .env
     environment:
