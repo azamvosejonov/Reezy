@@ -47,22 +47,19 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-reezy}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=reezy
+      - POSTGRES_HOST_AUTH_METHOD=trust
     volumes:
-      - postgres_data:/var/lib/postgresql/data/
-      # Optional: Custom PostgreSQL configuration
-      # - ./postgresql.conf:/etc/postgresql/postgresql.conf
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-reezy}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
       timeout: 5s
       retries: 5
-      start_period: 10s
     networks:
       - app-network
     # PostgreSQL tuning for better performance
@@ -108,7 +105,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-    command: celery -A main.celery_app worker --loglevel=INFO --pool=solo
+    command: celery -A celery_config.app worker --loglevel=INFO --pool=solo
     env_file:
       - .env
     environment:
@@ -132,7 +129,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-    command: celery -A main.celery_app beat --loglevel=INFO
+    command: celery -A celery_config.app beat --loglevel=INFO
     volumes:
       - ./celerybeat-schedule:/app/celerybeat-schedule
     env_file:
