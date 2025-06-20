@@ -53,10 +53,14 @@ WORKDIR /app
 RUN mkdir -p /app/uploads /app/media /app/static /app/celerybeat-schedule && \
     chown -R appuser:appuser /app
 
-# Create celerybeat schedule file
+# Create celerybeat schedule file with proper permissions
 RUN touch /app/celerybeat-schedule/celerybeat-schedule && \
     chown appuser:appuser /app/celerybeat-schedule/celerybeat-schedule && \
-    chmod 666 /app/celerybeat-schedule/celerybeat-schedule
+    chmod 666 /app/celerybeat-schedule/celerybeat-schedule && \
+    # Create a backup file for persistent storage
+    touch /app/celerybeat-schedule/celerybeat-schedule.db && \
+    chown appuser:appuser /app/celerybeat-schedule/celerybeat-schedule.db && \
+    chmod 666 /app/celerybeat-schedule/celerybeat-schedule.db
 
 # Add app directory to PYTHONPATH
 ENV PYTHONPATH=/app:$PYTHONPATH

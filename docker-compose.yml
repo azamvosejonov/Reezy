@@ -127,7 +127,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-    command: celery -A celery_app.celery beat --loglevel=INFO --scheduler celery.beat.PersistentScheduler --schedule /app/celerybeat-schedule/celerybeat-schedule
+    command: celery -A celery_app.celery beat --loglevel=INFO --scheduler celery.beat.PersistentScheduler --schedule /app/celerybeat-schedule/celerybeat-schedule.db
     volumes:
       - ./celerybeat-schedule:/app/celerybeat-schedule
     env_file:
