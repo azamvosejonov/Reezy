@@ -107,30 +107,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    restart: unless-stopped
-    command: celery -A app worker -l INFO --concurrency=4 --prefetch-multiplier=1
-    volumes:
-      - ./uploads:/app/uploads
-      - ./media:/app/media
+    restart: always
+    command: celery -A app worker --loglevel=INFO --pool=solo
     env_file:
       - .env
     environment:
       - C_FORCE_ROOT=true
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-reezy}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "celery", "-A", "app", "inspect", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
     networks:
       - app-network
     deploy:
@@ -143,32 +131,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    restart: unless-stopped
-    command: celery -A celery_app beat --loglevel=info --scheduler=celery.beat.PersistentScheduler
+    restart: always
+    command: celery -A app beat --loglevel=INFO
     volumes:
       - ./celerybeat-schedule:/app/celerybeat-schedule
-      - ./uploads:/app/uploads
-      - ./media:/app/media
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-reezy}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
-      celery:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A celery_app inspect active || exit 1"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
     networks:
       - app-network
 
