@@ -6,7 +6,7 @@ celery = Celery(
     __name__,
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=['tasks.post_tasks']  # Include tasks from the tasks directory
+    include=['tasks', 'tasks.post_tasks']  # Include tasks from both files
 )
 
 celery.conf.update(
