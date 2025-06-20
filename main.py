@@ -17,7 +17,6 @@ from jose import jwt, JWTError
 from sqlalchemy.orm import Session as DBSession
 
 from models import User
-from celery_config import app as celery_app
 
 # Load environment variables
 load_dotenv()
