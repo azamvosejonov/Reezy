@@ -108,7 +108,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-    command: celery -A app worker --loglevel=INFO --pool=solo
+    command: celery -A main.celery_app worker --loglevel=INFO --pool=solo
     env_file:
       - .env
     environment:
@@ -132,7 +132,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-    command: celery -A app beat --loglevel=INFO
+    command: celery -A main.celery_app beat --loglevel=INFO
     volumes:
       - ./celerybeat-schedule:/app/celerybeat-schedule
     env_file:
