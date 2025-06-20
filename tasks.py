@@ -1,8 +1,6 @@
-from celery_app import celery
+from celery import shared_task
 
-@celery.task
-def update_data():
-    # Bu yerga ma'lumotlarni yangilash mantig'ini yozing
-    # Masalan, ma'lumotlar bazasidan o'qish, API so'rovlari yuborish va hokazo.
-    print("Ma'lumotlar yangilanmoqda...")
-    return {"status": "success", "message": "Data updated"}
+@shared_task
+def periodic_task():
+    print("Periodic task is running...")
+    # Bu yerda kerakli amallarni bajarish mumkin
