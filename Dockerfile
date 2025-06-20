@@ -50,11 +50,13 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 WORKDIR /app
 
 # Create necessary directories with proper permissions
-RUN mkdir -p /app/uploads /app/media /app/static && \
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/uploads /app/media /app/static /app/celerybeat-schedule && \
     chown -R appuser:appuser /app
 
-
+# Create celerybeat schedule file
 RUN touch /app/celerybeat-schedule/celerybeat-schedule && \
+    chown appuser:appuser /app/celerybeat-schedule/celerybeat-schedule && \
     chmod 666 /app/celerybeat-schedule/celerybeat-schedule
 
 # Copy project files
