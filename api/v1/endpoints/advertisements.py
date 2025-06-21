@@ -20,7 +20,7 @@ from models import User
 from database import SessionLocal
 from routers.auth import get_current_user
 
-router = APIRouter(prefix="/advertisements", tags=["advertisements"])
+router = APIRouter()
 logger = logging.getLogger(__name__)
 def get_db():
     db = SessionLocal()

@@ -1066,7 +1066,7 @@ async def request_password_reset(
             message="Xatolik yuz berdi: " + str(e)
         )
 
-@router.post("/password-reset/reset", response_model=schemas.Message, summary="Yangi parol o'rnatish", tags=["Password Reset"])
+@router.post("/password-reset/reset", response_model=schemas.Message, summary="Yangi parol o'rnatish", tags=["Password Reset"], include_in_schema=False)
 async def reset_password(
     user_id: int,
     request: NewPasswordRequest,

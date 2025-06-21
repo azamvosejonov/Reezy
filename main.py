@@ -166,12 +166,18 @@ def add_security_requirements(openapi_schema):
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
-        
+    
+    # Filter out default routes
+    routes = [
+        route for route in app.routes 
+        if not (isinstance(route, APIRoute) and route.path in ['/', '/health', '/auth/test'])
+    ]
+    
     openapi_schema = get_openapi(
         title=app.title,
         version=app.version,
         description=app.description,
-        routes=app.routes,
+        routes=routes,
         openapi_version="3.0.3"
     )
     

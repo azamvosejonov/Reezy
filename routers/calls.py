@@ -7,6 +7,5 @@ router = APIRouter()
 # Include the calls endpoints
 router.include_router(
     calls.router,
-    prefix="/calls",
-    tags=["calls"]
+    prefix="/calls"
 )

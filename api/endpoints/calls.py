@@ -16,7 +16,7 @@ from routers.auth import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-@router.post("/initiate", response_model=Call)
+@router.post("/initiate")
 async def initiate_call(
     call_data: CallCreate,
     db: Session = Depends(get_db),
@@ -82,7 +82,7 @@ async def end_call(
         call = call_service.end_call(call_id, current_user.id)
         # Notify other participants
         await connection_manager.notify_call_status_change(
-            call_id, 
+            call_id,
             "call_ended",
             initiator_id=current_user.id
         )
@@ -119,14 +119,14 @@ async def get_missed_calls(
     call_service = CallService(db)
     # Get calls where the user was receiver and call was missed (rejected or ended without answer)
     calls = call_service.get_user_calls(current_user.id, limit, offset)
-    
+
     # Filter missed calls (where user was receiver and call was rejected or ended without answer)
     missed_calls = []
     for call in calls:
-        if (call.receiver_id == current_user.id and 
+        if (call.receiver_id == current_user.id and
             (call.status == "rejected" or (call.status == "completed" and not call.start_time))):
             missed_calls.append(call)
-    
+
     return missed_calls
 
 @router.get("/{call_id}", response_model=CallWithParticipants)

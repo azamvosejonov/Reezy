@@ -36,8 +36,6 @@ EMAIL_PASSWORD = "Orifjon360"
 RESET_TOKEN_EXPIRE_MINUTES = 30  # 30 minutes for reset token expiration
 
 router = APIRouter(
-    prefix="/accounts",
-    tags=["accounts"],
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")

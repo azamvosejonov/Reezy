@@ -9,7 +9,7 @@ from routers.auth import get_current_user, get_optional_current_user
 from schemas.user import UserResponse, UserUpdate, PublicUserResponse
 from services.user_service import UserService
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
 def get_db():

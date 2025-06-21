@@ -75,18 +75,61 @@ def create_group(
     }
 
 @router.post("/{group_id}/add_member", response_model=Dict[str, Any], summary="Guruhga odam qo'shish (faqat admin)")
-def add_member(group_id: int, user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def add_member(
+    group_id: int, 
+    username: str = Form(..., description="Foydalanuvchi nomi yoki uning bir qismi"),
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
     # Check if current user is admin of the group
     is_admin = db.query(models.GroupAdmin).filter_by(group_id=group_id, user_id=current_user.id).first()
     if not is_admin:
         raise HTTPException(status_code=403, detail="Faqat admin qo'sha oladi")
-    exists = db.query(models.GroupMember).filter_by(group_id=group_id, user_id=user_id).first()
-    if exists:
-        raise HTTPException(status_code=400, detail="Bu foydalanuvchi allaqachon guruhda")
-    member = models.GroupMember(group_id=group_id, user_id=user_id)
-    db.add(member)
-    db.commit()
-    return {"detail": "Qo'shildi"}
+    
+    # Try to find exact username match first
+    user = db.query(models.User).filter(models.User.username.ilike(username)).first()
+    
+    if user:
+        # Check if user is already in the group
+        exists = db.query(models.GroupMember).filter_by(
+            group_id=group_id, 
+            user_id=user.id
+        ).first()
+        
+        if exists:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"{user.username} allaqachon guruhda"
+            )
+            
+        # Add user to group
+        member = models.GroupMember(group_id=group_id, user_id=user.id)
+        db.add(member)
+        db.commit()
+        return {"detail": f"{user.username} guruhga qo'shildi"}
+    
+    # If no exact match, find similar usernames
+    similar_users = db.query(models.User).filter(
+        models.User.username.ilike(f"%{username}%")
+    ).limit(10).all()
+    
+    if similar_users:
+        suggestions = [{
+            "id": user.id,
+            "username": user.username,
+            "profile_picture": user.profile_picture
+        } for user in similar_users]
+        
+        raise HTTPException(
+            status_code=404,
+            detail="Aniq foydalanuvchi topilmadi. Quyidagi foydalanuvchilardan birini tanlang:",
+            headers={"suggestions": str(suggestions)}
+        )
+    
+    raise HTTPException(
+        status_code=404,
+        detail="Foydalanuvchi topilmadi"
+    )
 
 @router.delete("/{group_id}/remove_member", response_model=Dict[str, Any], summary="Guruhdan odam o'chirish (faqat admin)")
 def remove_member(group_id: int, user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):

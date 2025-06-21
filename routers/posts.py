@@ -479,51 +479,12 @@ def delete_post(post_id: int, user_id: int, db: Session = Depends(get_db)):
 # Barcha postlar (random tartibda)
 @router.get("/all_random", response_model=list[schemas.Post], summary="Barcha postlar random tartibda")
 def get_all_posts_random(request: Request, db: Session = Depends(get_db)):
-    # Get real IP address from request
-    client_ip = request.client.host
-    
-    # Get country from IP address using real IP geolocation service
-    country_code = 'UZ'  # Default to Uzbekistan
-    try:
-        # Use a real IP geolocation service to get country code
-        # This is a placeholder - you would need to implement a real service
-        if client_ip != '127.0.0.1':
-            # Example countries (you would get these from a real geolocation service)
-            country_code = {
-                '192.168.1.0/24': 'UZ',  # Uzbekistan
-                '192.168.2.0/24': 'RU',  # Russia
-                '192.168.3.0/24': 'KZ',  # Kazakhstan
-                '192.168.4.0/24': 'TM',  # Turkmenistan
-                '192.168.5.0/24': 'KG',  # Kyrgyzstan
-                '192.168.6.0/24': 'TJ',  # Tajikistan
-                '192.168.7.0/24': 'AF',  # Afghanistan
-                '192.168.8.0/24': 'IR',  # Iran
-                '192.168.9.0/24': 'PK',  # Pakistan
-                '192.168.10.0/24': 'CN',  # China
-                '192.168.11.0/24': 'MN',  # Mongolia
-                '192.168.12.0/24': 'IN',  # India
-                '192.168.13.0/24': 'NP',  # Nepal
-                '192.168.14.0/24': 'BD',  # Bangladesh
-                '192.168.15.0/24': 'MM',  # Myanmar
-                # Add more countries as needed
-            }.get(client_ip.split('.')[2], 'UZ')  # Default to Uzbekistan
-    except Exception as e:
-        logger.warning(f"Could not get country from IP: {str(e)}")
-        country_code = 'UZ'  # Default to Uzbekistan
-    
-    # Get country from IP address using our IP geolocation function
-    user_country_code = get_country_from_ip(client_ip)
-    if not user_country_code:
-        user_country_code = 'UZ'  # Default to Uzbekistan
-    
     # Get current user's ID from request (assuming it's in the request)
     current_user_id = request.state.user_id if hasattr(request.state, 'user_id') else None
     
-    # Get posts with owner information
+    # Get all posts with owner information
     posts = db.query(models.Post).options(
         sqlalchemy.orm.joinedload(models.Post.owner)
-    ).filter(
-        models.Post.country_code == user_country_code
     ).all()
     
     # If user is logged in, add posts from followed users
@@ -540,22 +501,13 @@ def get_all_posts_random(request: Request, db: Session = Depends(get_db)):
             models.Post.user_id.in_([f.following_id for f in followed_users])
         ).all()
         
-        # Add followed posts to the list
-        posts.extend(followed_posts)
-        
-    # If less than 100 posts found, mix with posts from other countries
-    if len(posts) < 100:
-        # Get remaining posts from other countries
-        other_posts = db.query(models.Post).options(
-            sqlalchemy.orm.joinedload(models.Post.owner)
-        ).filter(
-            models.Post.country_code != user_country_code
-        ).all()
-        
-        # Mix the posts (70% from user's country, 30% from other countries)
-        posts.extend(other_posts[:max(0, 100 - len(posts))])
-        
-    # Shuffle to mix the posts
+        # Add followed posts to the list if not already present
+        followed_post_ids = {p.id for p in posts}
+        for post in followed_posts:
+            if post.id not in followed_post_ids:
+                posts.append(post)
+    
+    # Shuffle all posts
     import random
     random.shuffle(posts)
 
@@ -582,27 +534,15 @@ def get_all_posts_random(request: Request, db: Session = Depends(get_db)):
     
     # Return formatted posts
     return formatted_posts
-
-
-# Barcha post videolar (random tartibda)
 @router.get("/all_videos_random", response_model=list[schemas.Post], summary="Barcha post videolar random tartibda")
 def get_all_post_videos_random(request: Request, db: Session = Depends(get_db)):
-    # Get real IP address from request
-    client_ip = request.client.host
-    
-    # Get country from IP address using our IP geolocation function
-    user_country_code = get_country_from_ip(client_ip)
-    if not user_country_code:
-        user_country_code = 'UZ'  # Default to Uzbekistan
-    
-    # Get current user's ID from request (assuming it's in the request)
+    # Get current user's ID from request (if available)
     current_user_id = request.state.user_id if hasattr(request.state, 'user_id') else None
     
-    # Get video posts with owner information
+    # Get all video posts
     posts = db.query(models.Post).options(
         sqlalchemy.orm.joinedload(models.Post.owner)
     ).filter(
-        models.Post.country_code == user_country_code,
         models.Post.media_type == 'video'
     ).all()
     
@@ -621,110 +561,34 @@ def get_all_post_videos_random(request: Request, db: Session = Depends(get_db)):
             models.Post.media_type == 'video'
         ).all()
         
-        # Add followed posts to the list
-        posts.extend(followed_posts)
-        
-    # If less than 100 posts found, mix with video posts from other countries
-    if len(posts) < 100:
-        # Get remaining video posts from other countries
-        other_posts = db.query(models.Post).options(
-            sqlalchemy.orm.joinedload(models.Post.owner)
-        ).filter(
-            models.Post.country_code != user_country_code,
-            models.Post.media_type == 'video'
-        ).all()
-        
-        # Mix the posts (70% from user's country, 30% from other countries)
-        posts.extend(other_posts[:max(0, 100 - len(posts))])
-        
-    # Shuffle to mix the posts
+        # Add followed posts to the list if not already present
+        post_ids = {p.id for p in posts}
+        for post in followed_posts:
+            if post.id not in post_ids:
+                posts.append(post)
+    
+    # Shuffle all video posts
     import random
     random.shuffle(posts)
-
+    
     # Format posts
-    formatted_posts = []
-    for post in posts:
-        post_dict = {
-            "id": post.id,
-            "content": post.content,
-            "media_url": post.media_url,
-            "media_type": post.media_type,
-            "created_at": post.created_at,
-            "updated_at": post.updated_at if hasattr(post, 'updated_at') else post.created_at,
-            "user_id": post.user_id,
-            "country_code": post.country_code,
-            "like_count": 0,  # Default to 0 since we don't have like count yet
-            "user": {
-                "id": post.owner.id,
-                "username": post.owner.username,
-                "profile_picture": post.owner.profile_picture
-            } if post.owner else None
-        }
-        formatted_posts.append(post_dict)
-    
-    # Return formatted posts
-    return formatted_posts
-    
-    # Get posts with owner relationship loaded, filter for videos and by country
-    posts = db.query(models.Post).options(
-        sqlalchemy.orm.joinedload(models.Post.owner)
-    ).filter(
-        models.Post.media_url.isnot(None),
-        models.Post.country_code == user_country_code
-    ).all()
-    
-    # If user is logged in, add posts from followed users
-    if current_user_id:
-        # Get followed users
-        followed_users = db.query(models.Follow).filter(
-            models.Follow.follower_id == current_user_id
-        ).all()
-        
-        # Get posts from followed users
-        followed_posts = db.query(models.Post).options(
-            sqlalchemy.orm.joinedload(models.Post.owner)
-        ).filter(
-            models.Post.media_url.isnot(None),
-            models.Post.user_id.in_([f.following_id for f in followed_users])
-        ).all()
-        
-        # Add followed posts to the list
-        posts.extend(followed_posts)
-        
-    # If less than 100 posts found, mix with posts from other countries
-    if len(posts) < 100:
-        # Get remaining posts from other countries
-        other_posts = db.query(models.Post).options(
-            sqlalchemy.orm.joinedload(models.Post.owner)
-        ).filter(
-            models.Post.media_url.isnot(None),
-            models.Post.country_code != user_country_code
-        ).all()
-        
-        # Mix the posts (70% from user's country, 30% from other countries)
-        posts.extend(other_posts[:max(0, 100 - len(posts))])
-        
-        # Shuffle to mix the posts
-        import random
-        random.shuffle(posts)
-
     video_posts = []
-    import random
-
-    # Filter for video posts
     video_posts_list = []
+    
+    # First, collect all video posts with their media info
     for post in posts:
         if post.media_url:
             try:
                 media_info = json.loads(post.media_url)
-                if media_info.get('type') == 'video':
-                    video_posts_list.append((post, media_info))
+                video_posts_list.append((post, media_info))
             except json.JSONDecodeError:
-                continue
-
+                media_info = {'url': post.media_url, 'type': 'video'}
+                video_posts_list.append((post, media_info))
+    
     # Shuffle the video posts
+    import random
     random.shuffle(video_posts_list)
-
+    
     # Format the response
     for post, media_info in video_posts_list:
         # Get owner info
@@ -745,10 +609,7 @@ def get_all_post_videos_random(request: Request, db: Session = Depends(get_db)):
             "is_ad": False,
             "created_at": post.created_at,
             "updated_at": post.updated_at if hasattr(post, 'updated_at') else post.created_at,
-            "user": user_info if user_info else {"id": post.user_id, "username": "Unknown",
-                                                 "profile_picture": None} if user_info else {"id": post.user_id,
-                                                                                             "username": "Unknown",
-                                                                                             "profile_picture": None}
+            "user": user_info or {"id": post.user_id, "username": "Unknown", "profile_picture": None}
         }
         video_posts.append(formatted_post)
 

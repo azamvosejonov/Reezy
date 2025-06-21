@@ -90,7 +90,13 @@ def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(get_db)
         db.refresh(db_channel)
         
         # Auto-subscribe the creator
-        subscribe_channel(db_channel.id, channel.creator_id, db)
+        subscription = models.ChannelSubscriber(
+            channel_id=db_channel.id,
+            user_id=current_user.id,
+            subscribed_at=datetime.utcnow()
+        )
+        db.add(subscription)
+        db.commit()
         
         # Format the response according to ChannelResponse schema
         response = {
@@ -583,7 +589,7 @@ def get_message_comments(
     is_subscribed = db.query(models.ChannelSubscriber).filter(
         and_(
             models.ChannelSubscriber.channel_id == message.channel_id,
-            models.ChannelSubscriber.user_id == user_id
+            models.ChannelSubscriber.user_id == current_user
         )
     ).first()
     
