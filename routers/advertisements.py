@@ -1,29 +1,39 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.security import OAuth2PasswordBearer
+from jose import jwt, JWTError
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timedelta
 
 from models import User, Advertisement as AdvertisementModel
-from database import SessionLocal
-from routers.auth import get_current_user
+from database import SessionLocal, get_db
+from routers.auth import get_current_user, oauth2_scheme
 
 from schemas import AdvertisementCreate, Advertisement as AdvertisementSchema, AdvertisementApprove, AdvertisementStats
 
-# JWT Configuration
-SECRET_KEY = "your-secret-key"  # In production, use environment variables
-ALGORITHM = "HS256"
+# Use the same oauth2_scheme from auth.py
+# This will handle both header and cookie authentication
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_current_active_user(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check if the current user is active.
+    """
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is inactive"
+        )
+    return current_user
 
-async def get_current_admin_user(db: Session = Depends(get_db)):
-    # TODO: Add a way to identify the user without authentication
-    current_user = db.query(User).filter(User.id == 1, User.is_admin == True).first() # Using a dummy admin user ID
-    if not current_user:
+async def get_current_admin_user(
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Check if the current user is an admin.
+    """
+    if not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
@@ -36,14 +46,24 @@ router = APIRouter(prefix="/advertisements", tags=["advertisements"])
 VIEWS_PER_DOLLAR = 900
 MAX_BUDGET = 1000
 
-@router.post("/", response_model=AdvertisementSchema)
+@router.post("/", response_model=AdvertisementSchema, status_code=status.HTTP_201_CREATED)
 async def create_advertisement(
     ad_data: AdvertisementCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Create a new advertisement"""
-    # Create the advertisement
+    """
+    Create a new advertisement
+    
+    - **title**: Advertisement title
+    - **description**: Detailed description
+    - **image_url**: URL of the advertisement image
+    - **target_url**: URL where the ad should lead
+    - **is_active**: Whether the ad is active
+    - **start_date**: When the ad should start showing
+    - **end_date**: When the ad should stop showing
+    """
+    # Create the advertisement with the current user's ID
     db_ad = AdvertisementModel(
         title=ad_data.title,
         description=ad_data.description,
@@ -52,12 +72,10 @@ async def create_advertisement(
         is_active=ad_data.is_active,
         start_date=ad_data.start_date,
         end_date=ad_data.end_date,
-        user_id=1,  # TODO: Replace with actual user ID from auth
+        user_id=current_user.id,  # Use the authenticated user's ID
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
-        # These fields will be set by the database
-        id=None,  # Will be auto-generated
-        created_by=1  # Same as user_id
+        created_by=current_user.id  # Set created_by to current user's ID
     )
     
     db.add(db_ad)
@@ -71,10 +89,12 @@ async def get_my_advertisements(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all advertisements for the current user"""
-    # TODO: Add a way to identify the user without authentication
-    current_user_id = 1 # Using a dummy user ID
-    return db.query(AdvertisementModel).filter(AdvertisementModel.user_id == current_user_id).all()
+    """
+    Get all advertisements for the currently authenticated user
+    """
+    return db.query(AdvertisementModel).filter(
+        AdvertisementModel.user_id == current_user.id
+    ).all()
 
 @router.get("/pending", response_model=List[AdvertisementSchema])
 async def get_pending_advertisements(
